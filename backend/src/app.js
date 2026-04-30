@@ -9,6 +9,7 @@ const adminRoutes = require('./routes/admin');
 const facultyRoutes = require('./routes/faculty');
 const studentRoutes = require('./routes/student');
 const schedulingRoutes = require('./routes/scheduling');
+const chatRoutes = require('./routes/chat');
 
 const app = express();
 
@@ -60,6 +61,7 @@ app.use('/api/admin', generalLimiter, adminRoutes);
 app.use('/api/faculty', generalLimiter, facultyRoutes);
 app.use('/api/student', generalLimiter, studentRoutes);
 app.use('/api/scheduling', generalLimiter, schedulingRoutes);
+app.use('/api/chat', generalLimiter, chatRoutes);
 
 // 404 handler
 app.use((req, res) => {

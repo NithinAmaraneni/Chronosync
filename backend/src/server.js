@@ -79,31 +79,93 @@ const start = async () => {
     }
   });
 
-  // Simple in-memory chat
+  // Track connected users (in-memory is fine — only for routing live messages)
   const connectedUsers = new Map();
-  const messageHistory = [];
 
   io.on('connection', (socket) => {
-    socket.on('register', (userId) => {
+
+    // ── Register user & send chat history from DB ──
+    socket.on('register', async (userId) => {
       console.log(`[Socket] User registered: ${userId}`);
       connectedUsers.set(userId, socket.id);
-      socket.join(userId); 
-      socket.emit('history', messageHistory.filter(m => m.senderId === userId || m.receiverId === userId));
+      socket.join(userId);
+
+      // Fetch this user's clear records (one per conversation partner)
+      const { data: clears } = await supabase
+        .from('conversation_clears')
+        .select('other_user_id, cleared_at')
+        .eq('user_id', userId);
+
+      const clearMap = {};
+      for (const c of (clears || [])) {
+        clearMap[c.other_user_id] = c.cleared_at;
+      }
+
+      // Fetch all messages for this user
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+        .order('timestamp', { ascending: true });
+
+      if (error) {
+        console.error('[Socket] Failed to fetch history:', error.message);
+        socket.emit('history', []);
+      } else {
+        const history = (data || [])
+          .filter(m => {
+            // Determine conversation partner
+            const partner = m.sender_id === userId ? m.receiver_id : m.sender_id;
+            const clearedAt = clearMap[partner];
+            // If user cleared this conversation, only show messages after the clear time
+            if (clearedAt && new Date(m.timestamp) <= new Date(clearedAt)) return false;
+            return true;
+          })
+          .map(m => ({
+            id:         m.id,
+            senderId:   m.sender_id,
+            receiverId: m.receiver_id,
+            text:       m.text,
+            timestamp:  m.timestamp,
+          }));
+        socket.emit('history', history);
+      }
     });
 
-    socket.on('send_message', (data) => {
+    // ── Save message to DB then broadcast ──
+    socket.on('send_message', async (data) => {
       console.log(`[Socket] Message from ${data.senderId} to ${data.receiverId}: ${data.text}`);
+
+      // Persist to Supabase
+      const { data: saved, error } = await supabase
+        .from('messages')
+        .insert({
+          sender_id:   data.senderId,
+          receiver_id: data.receiverId,
+          text:        data.text,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[Socket] Failed to save message:', error.message);
+        return;
+      }
+
       const message = {
-        id: Date.now().toString(),
-        ...data,
-        timestamp: new Date().toISOString()
+        id:         saved.id,
+        senderId:   saved.sender_id,
+        receiverId: saved.receiver_id,
+        text:       saved.text,
+        timestamp:  saved.timestamp,
       };
-      messageHistory.push(message);
-      
+
+      // Broadcast to both sender and receiver rooms
       io.to(data.receiverId).emit('new_message', message);
       io.to(data.senderId).emit('new_message', message);
     });
 
+    // ── Clean up on disconnect ──
     socket.on('disconnect', () => {
       for (const [userId, socketId] of connectedUsers.entries()) {
         if (socketId === socket.id) {

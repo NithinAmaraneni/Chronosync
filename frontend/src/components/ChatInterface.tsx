@@ -28,6 +28,7 @@ export default function ChatInterface() {
   const [inputText, setInputText] = useState('');
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const selectedUserRef = useRef<UserInfo | null>(null);
@@ -122,6 +123,30 @@ export default function ChatInterface() {
     }
   }, [messages, selectedUser]);
 
+  const clearConversation = async () => {
+    if (!selectedUser || !user) return;
+    const otherUserId = (selectedUser as any).user_id || selectedUser.id;
+    const currentUserId = (user as any)?.userId || user?.id;
+
+    // ── 1. Clear local state immediately (instant UI feedback) ──
+    setMessages(prev => prev.filter(
+      m => !((m.senderId === currentUserId && m.receiverId === otherUserId) ||
+             (m.senderId === otherUserId && m.receiverId === currentUserId))
+    ));
+    setShowClearConfirm(false);
+
+    // ── 2. Persist clear timestamp to DB (best-effort, in background) ──
+    try {
+      const result = await api.request('/chat/clear', {
+        method: 'POST',
+        body: JSON.stringify({ other_user_id: otherUserId }),
+      });
+      console.log('[Chat] Conversation cleared in DB:', result);
+    } catch (err) {
+      console.error('[Chat] Failed to persist clear to DB (table may not exist yet):', err);
+    }
+  };
+
   const sendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim() || !selectedUser || !socket) {
@@ -137,22 +162,13 @@ export default function ChatInterface() {
       return;
     }
 
-    const messageId = Date.now().toString();
     const messageData = {
-      id: messageId,
       senderId: senderId,
       receiverId: (selectedUser as any).user_id || selectedUser.id,
       text: inputText.trim(),
-      timestamp: new Date().toISOString()
     };
-    
-    // Optimistic update so the sender sees it instantly
-    setMessages(prev => {
-      if (prev.some(m => m.id === messageId)) return prev;
-      return [...prev, messageData];
-    });
 
-    console.log('Sending message:', messageData);
+    // No optimistic update — server saves to DB and broadcasts back to sender
     socket.emit('send_message', messageData);
     setInputText('');
   };
@@ -243,14 +259,56 @@ export default function ChatInterface() {
         {selectedUser ? (
           <>
             {/* Chat Header */}
-            <div style={{ padding: '20px 30px', borderBottom: '1px solid #e5e7eb', background: 'white', display: 'flex', alignItems: 'center', boxShadow: '0 1px 3px rgba(0,0,0,0.02)', zIndex: 10 }}>
-              <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'linear-gradient(135deg, #f97316, #ef4444)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '1.2rem', marginRight: 15, boxShadow: '0 4px 10px rgba(249, 115, 22, 0.2)' }}>
-                {selectedUser.full_name.charAt(0)}
+            <div style={{ padding: '16px 30px', borderBottom: '1px solid #e5e7eb', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 1px 3px rgba(0,0,0,0.02)', zIndex: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'linear-gradient(135deg, #f97316, #ef4444)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '1.2rem', marginRight: 15, boxShadow: '0 4px 10px rgba(249, 115, 22, 0.2)' }}>
+                  {selectedUser.full_name.charAt(0)}
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.2rem', color: '#1f2937', fontWeight: 700 }}>{selectedUser.full_name}</h3>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#f97316', marginBottom: '2px' }}>
+                    {(selectedUser as any).user_id || selectedUser.id}
+                  </div>
+                  <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>{selectedUser.department}</span>
+                </div>
               </div>
-              <div>
-                <h3 style={{ margin: 0, fontSize: '1.2rem', color: '#1f2937', fontWeight: 700 }}>{selectedUser.full_name}</h3>
-                <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>{selectedUser.department} • Tap here for info</span>
-              </div>
+
+              {/* Clear Conversation Button */}
+              {!showClearConfirm ? (
+                <button
+                  onClick={() => setShowClearConfirm(true)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '6px',
+                    background: 'none', border: '1px solid #e5e7eb',
+                    borderRadius: '8px', padding: '8px 14px', cursor: 'pointer',
+                    color: '#6b7280', fontSize: '0.85rem', fontWeight: 500,
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = '#ef4444'; (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.borderColor = '#e5e7eb'; (e.currentTarget as HTMLButtonElement).style.color = '#6b7280'; }}
+                >
+                  <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 16, height: 16 }}>
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  Clear Chat
+                </button>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '8px 14px' }}>
+                  <span style={{ fontSize: '0.82rem', color: '#dc2626', fontWeight: 500 }}>Clear for you only?</span>
+                  <button
+                    onClick={clearConversation}
+                    style={{ background: '#ef4444', color: 'white', border: 'none', borderRadius: '6px', padding: '4px 12px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 }}
+                  >
+                    Yes, Clear
+                  </button>
+                  <button
+                    onClick={() => setShowClearConfirm(false)}
+                    style={{ background: 'none', color: '#6b7280', border: '1px solid #d1d5db', borderRadius: '6px', padding: '4px 10px', cursor: 'pointer', fontSize: '0.82rem' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
             </div>
             
             {/* Messages Container */}
