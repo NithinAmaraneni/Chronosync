@@ -150,6 +150,9 @@ class ApiClient {
   async updateSchedulingConstraint(id: string, data: any) { return this.request(`/scheduling/constraints/${id}`, { method: 'PATCH', body: JSON.stringify(data) }); }
   async deleteSchedulingConstraint(id: string) { return this.request(`/scheduling/constraints/${id}`, { method: 'DELETE' }); }
   async triggerTimetableGeneration(data: any) { return this.request('/scheduling/generate', { method: 'POST', body: JSON.stringify(data) }); }
+  async finalizeGeneratedTimetable(generationId: string, candidateId: string) {
+    return this.request('/scheduling/finalize', { method: 'POST', body: JSON.stringify({ generationId, candidateId }) });
+  }
   async getGenerationHistory() { return this.request('/scheduling/history'); }
   async getGenerationDetail(id: string) { return this.request(`/scheduling/history/${id}`); }
   async getAlgorithmConfig() { return this.request('/scheduling/config'); }

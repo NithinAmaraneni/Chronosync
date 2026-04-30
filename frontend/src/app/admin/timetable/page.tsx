@@ -19,6 +19,11 @@ export default function AdminTimetablePage() {
   const departments = ['Computer Science','Electronics','Mechanical','Civil','Electrical','Information Technology','Chemical','Biotechnology','Mathematics','Physics','Chemistry','Commerce','Arts'];
   const days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const years = ['1st Year','2nd Year','3rd Year','4th Year','5th Year'];
+  const sortSections = (a: string, b: string) => {
+    const an = Number(a.match(/\d+/)?.[0] || 999);
+    const bn = Number(b.match(/\d+/)?.[0] || 999);
+    return an - bn || a.localeCompare(b);
+  };
 
   const load = () => Promise.allSettled([
     api.getTimetableSlots(filterDept || undefined).then(d => setSlots(d.slots || [])),
@@ -77,10 +82,17 @@ export default function AdminTimetablePage() {
     } catch (err: any) { setMsg(err.message || 'Failed to delete slot.'); }
   };
 
-  // Group by day for visual grid
-  const grouped: Record<string, any[]> = {};
-  days.forEach(d => grouped[d] = []);
-  slots.forEach(s => { if (grouped[s.day]) grouped[s.day].push(s); });
+  const groupedByYearSem = slots.reduce((acc: Record<string, Record<string, Record<string, any[]>>>, slot: any) => {
+    const yearKey = slot.year || 'All Years';
+    const semKey = slot.subject?.semester || 'Unassigned Semester';
+    if (!acc[yearKey]) acc[yearKey] = {};
+    if (!acc[yearKey][semKey]) {
+      acc[yearKey][semKey] = {};
+      days.forEach(d => acc[yearKey][semKey][d] = []);
+    }
+    if (acc[yearKey][semKey][slot.day]) acc[yearKey][semKey][slot.day].push(slot);
+    return acc;
+  }, {});
 
   return (
     <div>
@@ -136,31 +148,50 @@ export default function AdminTimetablePage() {
 
       {/* Grid */}
       <div className="ds-card ds-fade-in" style={{ padding: '1rem' }}>
-        {loading ? <p style={{ color: '#9a7b6a' }}>Loading…</p> : (
-          <div className="ds-timetable">
-            {days.map(day => (
-              <div key={day}>
-                <div className="ds-tt-day">{day.slice(0, 3)}</div>
-                {grouped[day].length === 0 ? (
-                  <div className="ds-tt-empty">—</div>
-                ) : (
-                  grouped[day].map((slot: any) => (
-                    <div key={slot.id} className="ds-tt-slot">
-                      <div className="ds-tt-slot-subject">{slot.subject?.name || slot.subject?.code}</div>
-                      <div className="ds-tt-slot-time">{slot.start_time?.slice(0, 5)} – {slot.end_time?.slice(0, 5)}</div>
-                      {slot.faculty?.full_name && <div className="ds-tt-slot-room">👩‍🏫 {slot.faculty.full_name}</div>}
-                      {slot.room && <div className="ds-tt-slot-room">📍 {slot.room}</div>}
-                      <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
-                        <button className="ds-btn ds-btn-ghost" style={{ padding: '0.18rem' }} onClick={() => openEdit(slot)} title="Edit slot">
-                          <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 13, height: 13 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
-                        </button>
-                        <button className="ds-btn ds-btn-ghost" style={{ padding: '0.18rem' }} onClick={() => handleDelete(slot)} title="Delete slot">
-                          <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 13, height: 13 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                        </button>
+        {loading ? <p style={{ color: '#9a7b6a' }}>Loading…</p> : slots.length === 0 ? (
+          <div className="ds-empty"><div className="ds-empty-icon">📅</div><div className="ds-empty-title">No timetable slots</div><div className="ds-empty-sub">Generate or add slots to see year and semester sections.</div></div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+            {Object.keys(groupedByYearSem).sort(sortSections).map(yearKey => (
+              <div key={yearKey}>
+                <h3 style={{ fontFamily: "'Syne',sans-serif", fontWeight: 800, color: '#1c0a00', marginBottom: '0.75rem' }}>{yearKey}</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  {Object.keys(groupedByYearSem[yearKey]).sort(sortSections).map(semKey => (
+                    <section key={`${yearKey}-${semKey}`} style={{ borderTop: '1px solid rgba(0,0,0,0.06)', paddingTop: '0.85rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: '0.75rem' }}>
+                        <span className="ds-badge ds-badge-blue">{semKey}</span>
+                        <span style={{ fontSize: '0.76rem', color: '#9a7b6a' }}>{days.reduce((sum, day) => sum + groupedByYearSem[yearKey][semKey][day].length, 0)} classes</span>
                       </div>
-                    </div>
-                  ))
-                )}
+                      <div className="ds-timetable">
+                        {days.map(day => (
+                          <div key={day}>
+                            <div className="ds-tt-day">{day.slice(0, 3)}</div>
+                            {groupedByYearSem[yearKey][semKey][day].length === 0 ? (
+                              <div className="ds-tt-empty">—</div>
+                            ) : (
+                              groupedByYearSem[yearKey][semKey][day].map((slot: any) => (
+                                <div key={slot.id} className="ds-tt-slot">
+                                  <div className="ds-tt-slot-subject">{slot.subject?.name || slot.subject?.code}</div>
+                                  <div className="ds-tt-slot-time">{slot.start_time?.slice(0, 5)} – {slot.end_time?.slice(0, 5)}</div>
+                                  {slot.faculty?.full_name && <div className="ds-tt-slot-room">👩‍🏫 {slot.faculty.full_name}</div>}
+                                  {slot.room && <div className="ds-tt-slot-room">📍 {slot.room}</div>}
+                                  <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+                                    <button className="ds-btn ds-btn-ghost" style={{ padding: '0.18rem' }} onClick={() => openEdit(slot)} title="Edit slot">
+                                      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 13, height: 13 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                                    </button>
+                                    <button className="ds-btn ds-btn-ghost" style={{ padding: '0.18rem' }} onClick={() => handleDelete(slot)} title="Delete slot">
+                                      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 13, height: 13 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                    </button>
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
               </div>
             ))}
           </div>

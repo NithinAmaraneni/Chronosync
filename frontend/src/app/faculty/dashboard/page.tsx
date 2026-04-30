@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 export default function FacultyDashboard() {
   const { user } = useAuth();
   const [subjects, setSubjects] = useState<any[]>([]);
@@ -21,6 +23,12 @@ export default function FacultyDashboard() {
   }, []);
 
   const todaySlots = timetable[['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()]] || [];
+  const todayBySection = todaySlots.reduce((acc: Record<string, any[]>, slot: any) => {
+    const sectionKey = `${slot.year || 'All Years'} · ${slot.subject?.semester || 'Unassigned Semester'}`;
+    if (!acc[sectionKey]) acc[sectionKey] = [];
+    acc[sectionKey].push(slot);
+    return acc;
+  }, {});
   const pendingBookings = bookings.filter((b: any) => b.status === 'pending');
   const pendingLeaves = leaves.filter((l: any) => l.status === 'pending');
 
@@ -76,13 +84,20 @@ export default function FacultyDashboard() {
               <div className="ds-empty-sub">Enjoy your free day!</div>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {todaySlots.map((slot: any) => (
-                <div key={slot.id} className="ds-tt-slot">
-                  <div className="ds-tt-slot-subject">{slot.subject?.name || 'N/A'}</div>
-                  <div className="ds-tt-slot-time">{slot.start_time?.slice(0, 5)} – {slot.end_time?.slice(0, 5)}</div>
-                  {slot.room && <div className="ds-tt-slot-room">Room: {slot.room}</div>}
-                </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {Object.keys(todayBySection).sort().map(sectionKey => (
+                <section key={sectionKey}>
+                  <div style={{ marginBottom: '0.4rem' }}><span className="ds-badge ds-badge-blue">{sectionKey}</span></div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {todayBySection[sectionKey].map((slot: any) => (
+                      <div key={slot.id} className="ds-tt-slot">
+                        <div className="ds-tt-slot-subject">{slot.subject?.name || 'N/A'}</div>
+                        <div className="ds-tt-slot-time">{slot.start_time?.slice(0, 5)} – {slot.end_time?.slice(0, 5)}</div>
+                        {slot.room && <div className="ds-tt-slot-room">Room: {slot.room}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </section>
               ))}
             </div>
           )}

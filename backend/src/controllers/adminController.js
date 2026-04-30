@@ -594,7 +594,7 @@ const getAnalytics = async (req, res) => {
     // ═══════════════════════════════════════
     const { data: allSlots } = await supabase
       .from('timetable_slots')
-      .select('*, subject:subjects(name, code), faculty:users!timetable_slots_faculty_id_fkey(full_name, department)')
+      .select('*, subject:subjects(name, code, credits, semester), faculty:users!timetable_slots_faculty_id_fkey(full_name, department)')
       .order('day')
       .order('start_time');
 
@@ -753,6 +753,25 @@ const getAnalytics = async (req, res) => {
     }
     const departmentBreakdown = Object.values(deptData).sort((a, b) => b.classes - a.classes);
 
+    const sectionData = {};
+    for (const slot of slots) {
+      const year = slot.year || 'All Years';
+      const semester = slot.subject?.semester || 'Unassigned Semester';
+      const key = `${year}|${semester}`;
+      if (!sectionData[key]) sectionData[key] = { year, semester, classes: 0, departments: new Set() };
+      sectionData[key].classes++;
+      if (slot.department) sectionData[key].departments.add(slot.department);
+    }
+    const sectionBreakdown = Object.values(sectionData)
+      .map(section => ({ ...section, departments: section.departments.size }))
+      .sort((a, b) => {
+        const ay = Number(String(a.year).match(/\d+/)?.[0] || 999);
+        const by = Number(String(b.year).match(/\d+/)?.[0] || 999);
+        const as = Number(String(a.semester).match(/\d+/)?.[0] || 999);
+        const bs = Number(String(b.semester).match(/\d+/)?.[0] || 999);
+        return ay - by || as - bs;
+      });
+
     // ═══════════════════════════════════════
     // 10. ENERGY EFFICIENCY ANALYTICS
     // ═══════════════════════════════════════
@@ -832,6 +851,7 @@ const getAnalytics = async (req, res) => {
         // Charts
         dayDistribution,
         departmentBreakdown,
+        sectionBreakdown,
 
         // Energy
         energy: {
@@ -994,7 +1014,7 @@ const getTimetableSlots = async (req, res) => {
     const { department } = req.query;
     let query = supabase
       .from('timetable_slots')
-      .select('*, subject:subjects(name, code), faculty:users!timetable_slots_faculty_id_fkey(full_name)')
+      .select('*, subject:subjects(name, code, credits, semester), faculty:users!timetable_slots_faculty_id_fkey(full_name)')
       .order('day')
       .order('start_time');
     if (department) query = query.eq('department', department);

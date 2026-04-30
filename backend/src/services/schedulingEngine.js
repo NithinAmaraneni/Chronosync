@@ -32,6 +32,8 @@ const DEFAULT_CONFIG = {
   mutationRate: 0.15,
   tournamentSize: 5,
   convergenceThreshold: 30, // stop if no improvement for N generations
+  creditBasedClassCount: true,
+  defaultSessionsPerSubject: 3,
   // Fitness weights
   weights: {
     hardConflict: -100,       // faculty teaches >1 class at same time
@@ -49,6 +51,23 @@ const DEFAULT_CONFIG = {
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+function normalizeSemester(value) {
+  return String(value || 'Unassigned').trim() || 'Unassigned';
+}
+
+function semesterNumber(value) {
+  const match = String(value || '').match(/\d+/);
+  return match ? Number(match[0]) : null;
+}
+
+function yearLabelFromSemester(value) {
+  const sem = semesterNumber(value);
+  if (!sem) return null;
+  const year = Math.ceil(sem / 2);
+  const suffix = year === 1 ? 'st' : year === 2 ? 'nd' : year === 3 ? 'rd' : 'th';
+  return `${year}${suffix} Year`;
+}
+
 // ═══════════════════════════════════════════
 // DATA LOADER — Fetch all inputs from Supabase
 // ═══════════════════════════════════════════
@@ -59,7 +78,7 @@ async function loadSchedulingData(department, year) {
   // Faculty for this department
   const { data: facultyRaw } = await supabase
     .from('users')
-    .select('id, user_id, full_name, department')
+    .select('id, user_id, full_name, department, subjects')
     .eq('role', 'faculty')
     .eq('is_active', true)
     .eq('department', department);
@@ -78,7 +97,10 @@ async function loadSchedulingData(department, year) {
     .from('subjects')
     .select('*')
     .eq('department', department);
-  const subjects = subjectsRaw || [];
+  const subjects = (subjectsRaw || []).filter((subject) => {
+    if (!year) return true;
+    return yearLabelFromSemester(subject.semester) === year;
+  });
 
   // Classrooms
   const { data: roomsRaw } = await supabase
@@ -126,16 +148,53 @@ async function loadSchedulingData(department, year) {
 // ═══════════════════════════════════════════
 
 // Build the list of classes that need to be scheduled
-function buildClassList(subjects, assignments) {
+function normalizeToken(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getFacultyPoolForSubject(subject, assignments, faculty) {
+  const assignedIds = assignments
+    .filter(a => a.subject_id === subject.id)
+    .map(a => a.faculty_id)
+    .filter(Boolean);
+
+  if (assignedIds.length > 0) {
+    return assignedIds;
+  }
+
+  const subjectName = normalizeToken(subject.name);
+  const subjectCode = normalizeToken(subject.code);
+  const legacyMatches = faculty
+    .filter((member) => (member.subjects || []).some((entry) => {
+      const token = normalizeToken(entry);
+      return token === subjectName || token === subjectCode;
+    }))
+    .map((member) => member.id);
+
+  if (legacyMatches.length > 0) {
+    return legacyMatches;
+  }
+
+  return faculty.map((member) => member.id);
+}
+
+function getSessionsPerWeek(subject, config) {
+  if (!config.creditBasedClassCount) {
+    return Math.max(1, Number(config.defaultSessionsPerSubject) || 3);
+  }
+
+  const credits = Number(subject.credits);
+  return Math.max(1, Number.isFinite(credits) ? Math.round(credits) : Number(config.defaultSessionsPerSubject) || 3);
+}
+
+function buildClassList(subjects, assignments, faculty = [], config = DEFAULT_CONFIG) {
   const classes = [];
   for (const subject of subjects) {
-    // Each credit = 1 class per week
-    const sessionsPerWeek = Math.min(subject.credits || 3, 6);
-    // Find assigned faculty
-    const assigned = assignments.filter(a => a.subject_id === subject.id);
-    const facultyId = assigned.length > 0 ? assigned[0].faculty_id : null;
+    const sessionsPerWeek = getSessionsPerWeek(subject, config);
+    const facultyPool = getFacultyPoolForSubject(subject, assignments, faculty);
 
     for (let i = 0; i < sessionsPerWeek; i++) {
+      const facultyId = facultyPool.length > 0 ? facultyPool[i % facultyPool.length] : null;
       classes.push({
         classId: `${subject.id}_${i}`,
         subjectId: subject.id,
@@ -143,7 +202,8 @@ function buildClassList(subjects, assignments) {
         subjectCode: subject.code,
         facultyId,
         department: subject.department,
-        semester: subject.semester,
+        semester: normalizeSemester(subject.semester),
+        academicYear: yearLabelFromSemester(subject.semester),
       });
     }
   }
@@ -215,16 +275,16 @@ function evaluateFitness(chromosome, timeSlots, rooms, availability, config) {
   }
 
   // ── Hard Constraint: Student group conflict ──
-  // Same department students can't have 2 classes at once
+  // Same department + semester students can't have 2 classes at once.
   for (const genes of Object.values(daySlotMap)) {
-    const deptSeen = {};
+    const groupSeen = {};
     for (const g of genes) {
-      const deptKey = g.department;
-      if (deptSeen[deptKey]) {
+      const groupKey = `${g.department}_${g.semester || 'Unassigned'}`;
+      if (groupSeen[groupKey]) {
         score += w.studentConflict;
         hardConflicts++;
       }
-      deptSeen[deptKey] = true;
+      groupSeen[groupKey] = true;
     }
   }
 
@@ -309,13 +369,13 @@ function evaluateFitness(chromosome, timeSlots, rooms, availability, config) {
   }
 
   // ── Penalty: Gaps in student schedule ──
-  const deptDaySlots = {};
+  const groupDaySlots = {};
   for (const gene of chromosome) {
-    const key = `${gene.department}_${gene.day}`;
-    if (!deptDaySlots[key]) deptDaySlots[key] = [];
-    deptDaySlots[key].push(gene.slotIdx);
+    const key = `${gene.department}_${gene.semester || 'Unassigned'}_${gene.day}`;
+    if (!groupDaySlots[key]) groupDaySlots[key] = [];
+    groupDaySlots[key].push(gene.slotIdx);
   }
-  for (const slots of Object.values(deptDaySlots)) {
+  for (const slots of Object.values(groupDaySlots)) {
     if (slots.length < 2) continue;
     slots.sort((a, b) => a - b);
     for (let i = 1; i < slots.length; i++) {
@@ -443,16 +503,17 @@ function cspRepair(chromosome, timeSlots, rooms, days) {
         roomSeen[g.roomId] = true;
       }
 
-      // Check department conflicts
-      const deptSeen = {};
+      // Check student-group conflicts
+      const groupSeen = {};
       for (const idx of indices) {
         const g = chromosome[idx];
-        if (deptSeen[g.department]) {
+        const groupKey = `${g.department}_${g.semester || 'Unassigned'}`;
+        if (groupSeen[groupKey]) {
           chromosome[idx].day = days[Math.floor(Math.random() * days.length)];
           chromosome[idx].slotIdx = Math.floor(Math.random() * timeSlots.length);
           repaired = false;
         }
-        deptSeen[g.department] = true;
+        groupSeen[groupKey] = true;
       }
     }
 
@@ -478,12 +539,20 @@ async function runGeneticAlgorithm(data, config = {}) {
   const log = [...data.log];
 
   // 1. Build class list
-  const classes = buildClassList(subjects, assignments);
+  const classes = buildClassList(subjects, assignments, faculty, cfg);
   if (classes.length === 0) {
     return { success: false, message: 'No classes to schedule. Ensure subjects exist and are assigned to faculty.', log };
   }
 
-  log.push({ t: Date.now(), msg: `🧬 Starting GA: ${classes.length} classes, pop=${cfg.populationSize}, maxGen=${cfg.maxGenerations}` });
+  const unassignedClasses = classes.filter((cls) => !cls.facultyId).length;
+  if (unassignedClasses > 0) {
+    log.push({ t: Date.now(), msg: `⚠️ ${unassignedClasses} classes have no available faculty assignment.` });
+  }
+
+  log.push({
+    t: Date.now(),
+    msg: `🧬 Starting GA: ${classes.length} classes, pop=${cfg.populationSize}, maxGen=${cfg.maxGenerations}, creditRule=${cfg.creditBasedClassCount ? 'on' : 'off'}`,
+  });
 
   // 2. Generate initial population
   let population = createPopulation(cfg.populationSize, classes, timeSlots, rooms, DAYS);
@@ -584,21 +653,80 @@ async function runGeneticAlgorithm(data, config = {}) {
 // ═══════════════════════════════════════════
 // CONVERT CHROMOSOME → TIMETABLE SLOTS
 // ═══════════════════════════════════════════
-function chromosomeToSlots(chromosome, timeSlots, department, year) {
+function chromosomeToSlots(chromosome, timeSlots, department, year, faculty = [], rooms = []) {
+  const facultyMap = Object.fromEntries(faculty.map((member) => [member.id, member.full_name]));
+  const roomMap = Object.fromEntries(rooms.map((room) => [room.id, room.name]));
   return chromosome.map(gene => {
     const slot = timeSlots[gene.slotIdx];
     return {
       subject_id: gene.subjectId,
+      subject_name: gene.subjectName,
+      subject_code: gene.subjectCode,
+      semester: normalizeSemester(gene.semester),
       faculty_id: gene.facultyId,
+      faculty_name: gene.facultyId ? (facultyMap[gene.facultyId] || null) : null,
       department,
-      year: year || null,
+      year: year || gene.academicYear || null,
       day: gene.day,
       start_time: slot ? slot.start_time : '09:00',
       end_time: slot ? slot.end_time : '10:00',
       room: gene.roomId,
+      room_name: gene.roomId ? (roomMap[gene.roomId] || null) : null,
       slot_type: 'lecture',
     };
   });
+}
+
+function cleanCandidateSlots(slots) {
+  return slots.map((slot) => ({
+    ...slot,
+    room: typeof slot.room === 'string' && slot.room.startsWith('virtual') ? null : slot.room,
+  }));
+}
+
+function summarizeCandidate(slots) {
+  const dayCounts = {};
+  const roomSet = new Set();
+  const sectionCounts = {};
+  for (const slot of slots) {
+    dayCounts[slot.day] = (dayCounts[slot.day] || 0) + 1;
+    if (slot.room) roomSet.add(slot.room);
+    const sectionKey = `${slot.year || 'All Years'}|${slot.semester || 'Unassigned'}`;
+    sectionCounts[sectionKey] = (sectionCounts[sectionKey] || 0) + 1;
+  }
+
+  return {
+    slotsPerDay: DAYS.map((day) => ({ day, count: dayCounts[day] || 0 })),
+    sections: Object.entries(sectionCounts).map(([key, count]) => {
+      const [year, semester] = key.split('|');
+      return { year, semester, count };
+    }),
+    roomsUsed: roomSet.size,
+  };
+}
+
+async function persistFixedTimetable(department, year, slots) {
+  const dbSlots = slots.map((slot) => ({
+    subject_id: slot.subject_id,
+    faculty_id: slot.faculty_id,
+    department: slot.department,
+    year: slot.year,
+    day: slot.day,
+    start_time: slot.start_time,
+    end_time: slot.end_time,
+    room: slot.room,
+    slot_type: slot.slot_type || 'lecture',
+  }));
+
+  let deleteQuery = supabase.from('timetable_slots').delete().eq('department', department);
+  if (year) deleteQuery = deleteQuery.eq('year', year);
+  await deleteQuery;
+
+  const { error: insertErr } = await supabase
+    .from('timetable_slots')
+    .insert(dbSlots);
+
+  if (insertErr) throw insertErr;
 }
 
 // ═══════════════════════════════════════════
@@ -638,51 +766,77 @@ async function generateTimetable(department, year, config = {}) {
       data.log.push({ t: Date.now(), msg: '⚠️ No classrooms in DB — using virtual rooms' });
     }
 
-    // 2. Run GA
-    const result = await runGeneticAlgorithm(data, config);
+    // 2. Run GA three times to produce 3 candidate timetables
+    const candidateRuns = [];
+    const aggregateLog = [...data.log];
+    for (let i = 0; i < 3; i++) {
+      aggregateLog.push({ t: Date.now(), msg: `🧪 Generating candidate ${i + 1} of 3...` });
+      const runResult = await runGeneticAlgorithm(data, config);
+      if (!runResult.success) {
+        if (genId) {
+          await supabase.from('timetable_generations').update({
+            status: 'failed', log: runResult.log, completed_at: new Date().toISOString(),
+          }).eq('id', genId);
+        }
+        return runResult;
+      }
 
-    if (!result.success) {
+      const candidateSlots = cleanCandidateSlots(
+        chromosomeToSlots(runResult.bestChromosome, data.timeSlots, department, year, data.faculty, data.rooms)
+      );
+      candidateRuns.push({
+        id: `candidate_${i + 1}`,
+        name: `Option ${String.fromCharCode(65 + i)}`,
+        fitness: runResult.bestScore,
+        conflicts: runResult.bestConflicts,
+        generationsRun: runResult.generationsRun,
+        totalSlots: runResult.totalSlots,
+        slots: candidateSlots,
+        summary: summarizeCandidate(candidateSlots),
+        log: runResult.log,
+      });
+      aggregateLog.push(...runResult.log);
+    }
+
+    const candidates = candidateRuns
+      .sort((a, b) => {
+        if (a.conflicts !== b.conflicts) return a.conflicts - b.conflicts;
+        return b.fitness - a.fitness;
+      })
+      .map((candidate, index) => ({
+        ...candidate,
+        id: `candidate_${index + 1}`,
+        name: `Option ${String.fromCharCode(65 + index)}`,
+      }));
+
+    const bestCandidate = candidates[0];
+
+    if (!bestCandidate) {
       if (genId) {
         await supabase.from('timetable_generations').update({
-          status: 'failed', log: result.log, completed_at: new Date().toISOString(),
+          status: 'failed', log: aggregateLog, completed_at: new Date().toISOString(),
         }).eq('id', genId);
       }
-      return result;
+      return { success: false, message: 'Failed to generate timetable candidates.', log: aggregateLog };
     }
 
-    // 3. Convert to timetable slots
-    const slots = chromosomeToSlots(result.bestChromosome, data.timeSlots, department, year);
+    aggregateLog.push({ t: Date.now(), msg: '🗂️ Generated 3 timetable candidates. Waiting for admin selection.' });
 
-    // 4. Clear existing timetable for this department+year
-    let deleteQuery = supabase.from('timetable_slots').delete().eq('department', department);
-    if (year) deleteQuery = deleteQuery.eq('year', year);
-    await deleteQuery;
-
-    // 5. Insert new slots (handle virtual room IDs)
-    const cleanedSlots = slots.map(s => ({
-      ...s,
-      room: typeof s.room === 'string' && s.room.startsWith('virtual') ? null : s.room,
-    }));
-
-    const { error: insertErr } = await supabase
-      .from('timetable_slots')
-      .insert(cleanedSlots);
-
-    if (insertErr) {
-      result.log.push({ t: Date.now(), msg: `❌ DB insert error: ${insertErr.message}` });
-    } else {
-      result.log.push({ t: Date.now(), msg: `💾 Saved ${cleanedSlots.length} slots to database` });
-    }
-
-    // 6. Update generation record
+    // 3. Update generation record with candidates, but do not fix any timetable yet
     if (genId) {
       await supabase.from('timetable_generations').update({
         status: 'completed',
-        fitness_score: result.bestScore,
-        generations_run: result.generationsRun,
-        conflicts_remaining: result.bestConflicts,
-        total_slots_placed: result.totalSlots,
-        log: result.log,
+        fitness_score: bestCandidate.fitness,
+        generations_run: bestCandidate.generationsRun,
+        conflicts_remaining: bestCandidate.conflicts,
+        total_slots_placed: bestCandidate.totalSlots,
+        config: {
+          requestConfig: config,
+          candidates,
+          finalizedCandidateId: null,
+          finalizedAt: null,
+        },
+        log: aggregateLog,
         completed_at: new Date().toISOString(),
       }).eq('id', genId);
     }
@@ -690,14 +844,13 @@ async function generateTimetable(department, year, config = {}) {
     return {
       success: true,
       generationId: genId,
-      fitness: result.bestScore,
-      conflicts: result.bestConflicts,
-      generationsRun: result.generationsRun,
-      totalSlots: result.totalSlots,
-      message: result.bestConflicts === 0
-        ? `✅ Conflict-free timetable generated! (${result.totalSlots} slots, ${result.generationsRun} GA generations)`
-        : `⚠️ Timetable generated with ${result.bestConflicts} remaining conflicts. Manual review recommended.`,
-      log: result.log,
+      fitness: bestCandidate.fitness,
+      conflicts: bestCandidate.conflicts,
+      generationsRun: bestCandidate.generationsRun,
+      totalSlots: bestCandidate.totalSlots,
+      candidates,
+      message: `Generated 3 timetable options. Review them and fix the best one into the database.`,
+      log: aggregateLog,
     };
   } catch (err) {
     const errorLog = [{ t: Date.now(), msg: `❌ Error: ${err.message}` }];
@@ -710,11 +863,63 @@ async function generateTimetable(department, year, config = {}) {
   }
 }
 
+async function finalizeTimetableCandidate(generationId, candidateId) {
+  const { data: generation, error } = await supabase
+    .from('timetable_generations')
+    .select('*')
+    .eq('id', generationId)
+    .single();
+
+  if (error || !generation) {
+    throw new Error('Generation run not found.');
+  }
+
+  const candidates = generation.config?.candidates || [];
+  const candidate = candidates.find((item) => item.id === candidateId);
+  if (!candidate) {
+    throw new Error('Selected timetable candidate was not found.');
+  }
+
+  await persistFixedTimetable(generation.department, generation.year, candidate.slots || []);
+
+  const nextConfig = {
+    ...(generation.config || {}),
+    finalizedCandidateId: candidateId,
+    finalizedAt: new Date().toISOString(),
+  };
+  const nextLog = [
+    ...(generation.log || []),
+    { t: Date.now(), msg: `💾 Fixed ${candidate.name || candidateId} into the live timetable database.` },
+  ];
+
+  await supabase
+    .from('timetable_generations')
+    .update({
+      config: nextConfig,
+      log: nextLog,
+      fitness_score: candidate.fitness,
+      conflicts_remaining: candidate.conflicts,
+      total_slots_placed: candidate.totalSlots,
+      completed_at: new Date().toISOString(),
+    })
+    .eq('id', generationId);
+
+  return {
+    success: true,
+    generationId,
+    candidateId,
+    candidate,
+    message: `${candidate.name || 'Selected timetable'} has been fixed into the database.`,
+    log: nextLog,
+  };
+}
+
 // ═══════════════════════════════════════════
 // EXPORT
 // ═══════════════════════════════════════════
 module.exports = {
   generateTimetable,
+  finalizeTimetableCandidate,
   loadSchedulingData,
   evaluateFitness,
   DEFAULT_CONFIG,

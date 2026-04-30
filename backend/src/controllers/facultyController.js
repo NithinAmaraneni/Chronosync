@@ -21,7 +21,7 @@ const getMyTimetable = async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('timetable_slots')
-      .select('*, subject:subjects(name, code)')
+      .select('*, subject:subjects(name, code, credits, semester)')
       .eq('faculty_id', req.user.id)
       .order('day')
       .order('start_time');
@@ -344,4 +344,3 @@ module.exports = {
   getLeaveImpact,
   getStudents,
 };
-

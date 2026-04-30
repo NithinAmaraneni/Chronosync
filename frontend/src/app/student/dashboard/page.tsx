@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 export default function StudentDashboard() {
   const { user } = useAuth();
   const [timetable, setTimetable] = useState<any>({});
@@ -21,6 +23,12 @@ export default function StudentDashboard() {
 
   const todayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
   const todaySlots = timetable[todayName] || [];
+  const todayBySemester = todaySlots.reduce((acc: Record<string, any[]>, slot: any) => {
+    const semKey = slot.subject?.semester || 'Unassigned Semester';
+    if (!acc[semKey]) acc[semKey] = [];
+    acc[semKey].push(slot);
+    return acc;
+  }, {});
   const pendingBookings = bookings.filter((b: any) => b.status === 'pending');
   const totalClasses = Object.values(timetable).flat().length;
 
@@ -75,16 +83,23 @@ export default function StudentDashboard() {
           {todaySlots.length === 0 ? (
             <div className="ds-empty"><div className="ds-empty-icon">🎉</div><div className="ds-empty-title">No classes today</div><div className="ds-empty-sub">Enjoy your free day!</div></div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {todaySlots.map((slot: any) => (
-                <div key={slot.id} className="ds-tt-slot">
-                  <div className="ds-tt-slot-subject">{slot.subject?.name || 'N/A'}</div>
-                  <div className="ds-tt-slot-time">{slot.start_time?.slice(0, 5)} – {slot.end_time?.slice(0, 5)}</div>
-                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.2rem' }}>
-                    {slot.room && <span className="ds-tt-slot-room">📍 {slot.room}</span>}
-                    {slot.faculty?.full_name && <span className="ds-tt-slot-room">👩‍🏫 {slot.faculty.full_name}</span>}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {Object.keys(todayBySemester).sort().map(semKey => (
+                <section key={semKey}>
+                  <div style={{ marginBottom: '0.4rem' }}><span className="ds-badge ds-badge-blue">{semKey}</span></div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {todayBySemester[semKey].map((slot: any) => (
+                      <div key={slot.id} className="ds-tt-slot">
+                        <div className="ds-tt-slot-subject">{slot.subject?.name || 'N/A'}</div>
+                        <div className="ds-tt-slot-time">{slot.start_time?.slice(0, 5)} – {slot.end_time?.slice(0, 5)}</div>
+                        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.2rem', flexWrap: 'wrap' }}>
+                          {slot.room && <span className="ds-tt-slot-room">📍 {slot.room}</span>}
+                          {slot.faculty?.full_name && <span className="ds-tt-slot-room">👩‍🏫 {slot.faculty.full_name}</span>}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                </div>
+                </section>
               ))}
             </div>
           )}

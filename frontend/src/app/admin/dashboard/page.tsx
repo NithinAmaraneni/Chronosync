@@ -42,6 +42,7 @@ export default function AdminDashboard() {
 
   const departments = (analytics?.departmentBreakdown || []) as any[];
   const maxDept = Math.max(...departments.map((d: any) => d.students || d.classes || 0), 1);
+  const sections = (analytics?.sectionBreakdown || []) as any[];
 
   return (
     <div>
@@ -72,6 +73,26 @@ export default function AdminDashboard() {
             <div className="ds-stat-label">{s.label}</div>
           </div>
         ))}
+      </div>
+
+      <div className="ds-card ds-fade-in" style={{ marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+          <h3 style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, color: '#1c0a00', fontSize: '1rem', margin: 0 }}>Timetable By Year And Semester</h3>
+          <Link href="/admin/timetable" className="ds-btn ds-btn-outline" style={{ padding: '0.35rem 0.8rem', fontSize: '0.72rem' }}>View Timetable</Link>
+        </div>
+        {sections.length === 0 ? (
+          <div className="ds-empty"><div className="ds-empty-icon">📅</div><div className="ds-empty-title">No timetable sections</div><div className="ds-empty-sub">Generate a timetable to see year and semester sections.</div></div>
+        ) : (
+          <div className="ds-grid-4 ds-stagger">
+            {sections.map((section: any) => (
+              <div key={`${section.year}-${section.semester}`} style={{ padding: '0.8rem', background: 'rgba(255,248,240,0.8)', border: '1px solid rgba(249,115,22,0.1)', borderRadius: 12 }}>
+                <div style={{ fontSize: '0.72rem', color: '#9a7b6a', fontWeight: 700 }}>{section.year}</div>
+                <div style={{ fontFamily: "'Syne',sans-serif", color: '#1c0a00', fontWeight: 800, marginTop: 2 }}>{section.semester}</div>
+                <div style={{ fontSize: '0.76rem', color: '#7c5a4a', marginTop: 6 }}>{section.classes} classes · {section.departments} dept</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="ds-grid-2">

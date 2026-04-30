@@ -40,6 +40,10 @@ router.delete('/constraints/:id', ctrl.deleteConstraint);
 router.post('/generate', [
   body('department').trim().notEmpty().withMessage('Department is required.'),
 ], ctrl.triggerGeneration);
+router.post('/finalize', [
+  body('generationId').notEmpty().withMessage('generationId is required.'),
+  body('candidateId').notEmpty().withMessage('candidateId is required.'),
+], ctrl.finalizeGenerationCandidate);
 router.get('/history', ctrl.getGenerationHistory);
 router.get('/history/:id', ctrl.getGenerationDetail);
 router.get('/config', ctrl.getAlgorithmConfig);

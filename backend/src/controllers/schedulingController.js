@@ -1,5 +1,5 @@
 const supabase = require('../config/supabase');
-const { generateTimetable, DEFAULT_CONFIG } = require('../services/schedulingEngine');
+const { generateTimetable, finalizeTimetableCandidate, DEFAULT_CONFIG } = require('../services/schedulingEngine');
 const {
   detectConflicts,
   smartReschedule,
@@ -257,10 +257,26 @@ const triggerGeneration = async (req, res) => {
         generationsRun: result.generationsRun,
         totalSlots: result.totalSlots,
       },
+      candidates: result.candidates || [],
       log: result.log,
     });
   } catch (err) {
     console.error('Generation error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const finalizeGenerationCandidate = async (req, res) => {
+  try {
+    const { generationId, candidateId } = req.body;
+    if (!generationId || !candidateId) {
+      return res.status(400).json({ success: false, message: 'generationId and candidateId are required.' });
+    }
+
+    const result = await finalizeTimetableCandidate(generationId, candidateId);
+    res.json(result);
+  } catch (err) {
+    console.error('Finalize candidate error:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -276,7 +292,15 @@ const getGenerationHistory = async (req, res) => {
       .order('started_at', { ascending: false })
       .limit(20);
     if (error) throw error;
-    res.json({ success: true, generations: data || [] });
+    const generations = (data || []).map((generation) => ({
+      ...generation,
+      config: {
+        candidateCount: generation.config?.candidates?.length || 0,
+        finalizedCandidateId: generation.config?.finalizedCandidateId || null,
+        finalizedAt: generation.config?.finalizedAt || null,
+      },
+    }));
+    res.json({ success: true, generations });
   } catch (err) {
     console.error('Get generation history error:', err);
     res.status(500).json({ success: false, message: err.message });
@@ -291,7 +315,12 @@ const getGenerationDetail = async (req, res) => {
       .eq('id', req.params.id)
       .single();
     if (error) throw error;
-    res.json({ success: true, generation: data });
+    res.json({
+      success: true,
+      generation: data,
+      candidates: data?.config?.candidates || [],
+      finalizedCandidateId: data?.config?.finalizedCandidateId || null,
+    });
   } catch (err) {
     console.error('Get generation detail error:', err);
     res.status(500).json({ success: false, message: err.message });
@@ -390,6 +419,7 @@ module.exports = {
   updateConstraint,
   deleteConstraint,
   triggerGeneration,
+  finalizeGenerationCandidate,
   getGenerationHistory,
   getGenerationDetail,
   getAlgorithmConfig,

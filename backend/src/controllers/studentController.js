@@ -13,7 +13,7 @@ const getMyTimetable = async (req, res) => {
 
     const { data, error } = await supabase
       .from('timetable_slots')
-      .select('*, subject:subjects(name, code), faculty:users!timetable_slots_faculty_id_fkey(full_name)')
+      .select('*, subject:subjects(name, code, credits, semester), faculty:users!timetable_slots_faculty_id_fkey(full_name)')
       .eq('department', profile.department)
       .eq('year', profile.year)
       .order('day')

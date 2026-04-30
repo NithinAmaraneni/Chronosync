@@ -10,8 +10,11 @@ export default function AISchedulingPage() {
   const [activeTab, setActiveTab] = useState('generate');
   const [dept, setDept] = useState('');
   const [year, setYear] = useState('');
+  const [creditBasedClassCount, setCreditBasedClassCount] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [finalizingCandidateId, setFinalizingCandidateId] = useState<string | null>(null);
   const [logEntries, setLogEntries] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
   const [classrooms, setClassrooms] = useState<any[]>([]);
@@ -52,18 +55,28 @@ export default function AISchedulingPage() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logEntries]);
 
+  const selectedCandidate = result?.candidates?.find((candidate: any) => candidate.id === selectedCandidateId) || null;
+
   // ── Trigger generation ──
   const handleGenerate = async (e: FormEvent) => {
     e.preventDefault();
     if (!dept) return;
     setGenerating(true);
     setResult(null);
+    setSelectedCandidateId(null);
     setLogEntries([{ t: Date.now(), msg: '🚀 Starting AI timetable generation...' }]);
     setMsg('');
 
     try {
-      const res = await api.triggerTimetableGeneration({ department: dept, year: year || undefined });
+      const res = await api.triggerTimetableGeneration({
+        department: dept,
+        year: year || undefined,
+        config: {
+          creditBasedClassCount,
+        },
+      });
       setResult(res);
+      setSelectedCandidateId(res.candidates?.[0]?.id || null);
       setLogEntries(res.log || []);
       setMsg(res.message);
       // Refresh history
@@ -73,6 +86,52 @@ export default function AISchedulingPage() {
       setLogEntries(prev => [...prev, { t: Date.now(), msg: `❌ ${err.message || 'Error'}` }]);
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleFinalizeCandidate = async (candidateId: string) => {
+    if (!result?.data?.generationId) return;
+    setFinalizingCandidateId(candidateId);
+    try {
+      const res = await api.finalizeGeneratedTimetable(result.data.generationId, candidateId);
+      setMsg(res.message || 'Timetable fixed into database.');
+      setResult((prev: any) => ({
+        ...prev,
+        finalizedCandidateId: candidateId,
+      }));
+      api.getGenerationHistory().then(d => setHistory(d.generations || []));
+    } catch (err: any) {
+      setMsg(err.message || 'Failed to fix selected timetable.');
+    } finally {
+      setFinalizingCandidateId(null);
+    }
+  };
+
+  const handleOpenGeneration = async (generationId: string) => {
+    try {
+      const detail = await api.getGenerationDetail(generationId);
+      setActiveTab('generate');
+      setResult({
+        success: true,
+        data: {
+          generationId: detail.generation.id,
+          fitness: detail.generation.fitness_score,
+          conflicts: detail.generation.conflicts_remaining,
+          generationsRun: detail.generation.generations_run,
+          totalSlots: detail.generation.total_slots_placed,
+        },
+        candidates: detail.candidates || [],
+        finalizedCandidateId: detail.finalizedCandidateId || null,
+        log: detail.generation.log || [],
+        message: detail.finalizedCandidateId
+          ? 'This generation already has a fixed timetable.'
+          : 'Review the generated options and choose one to fix.',
+      });
+      setSelectedCandidateId(detail.finalizedCandidateId || detail.candidates?.[0]?.id || null);
+      setLogEntries(detail.generation.log || []);
+      setMsg(detail.finalizedCandidateId ? 'Opened a previously fixed timetable set.' : 'Opened generated timetable options.');
+    } catch (err: any) {
+      setMsg(err.message || 'Failed to open generation detail.');
     }
   };
 
@@ -189,6 +248,23 @@ export default function AISchedulingPage() {
     if (score > 0) return '#d97706';
     return '#dc2626';
   };
+  const sortSections = (a: string, b: string) => {
+    const an = Number(a.match(/\d+/)?.[0] || 999);
+    const bn = Number(b.match(/\d+/)?.[0] || 999);
+    return an - bn || a.localeCompare(b);
+  };
+
+  const groupCandidateSlots = (slots: any[] = []) => slots.reduce((acc: Record<string, Record<string, Record<string, any[]>>>, slot: any) => {
+    const yearKey = slot.year || 'All Years';
+    const semKey = slot.semester || 'Unassigned Semester';
+    if (!acc[yearKey]) acc[yearKey] = {};
+    if (!acc[yearKey][semKey]) {
+      acc[yearKey][semKey] = {};
+      ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].forEach(day => acc[yearKey][semKey][day] = []);
+    }
+    if (acc[yearKey][semKey][slot.day]) acc[yearKey][semKey][slot.day].push(slot);
+    return acc;
+  }, {});
 
   const constraintTypeLabels: Record<string, string> = {
     max_hours_per_day: '⏰ Max hours/day',
@@ -287,9 +363,22 @@ export default function AISchedulingPage() {
                     {years.map(y => <option key={y}>{y}</option>)}
                   </select>
                 </div>
+                <div className="ds-form-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0.75rem', border: '1px solid rgba(124,58,237,0.12)', borderRadius: 12, background: 'rgba(124,58,237,0.04)', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={creditBasedClassCount}
+                      onChange={e => setCreditBasedClassCount(e.target.checked)}
+                    />
+                    <span>
+                      <span style={{ display: 'block', fontWeight: 700, color: '#1c0a00', fontSize: '0.84rem' }}>Credit-based class count</span>
+                      <span style={{ display: 'block', color: '#9a7b6a', fontSize: '0.74rem', marginTop: 2 }}>4 credits = 4 classes, 3 credits = 3 classes, 2 credits = 2 classes, 1 credit = 1 class.</span>
+                    </span>
+                  </label>
+                </div>
                 <div className="ds-alert ds-alert-info" style={{ marginBottom: '1rem' }}>
                   <span>💡</span>
-                  <span style={{ fontSize: '0.78rem' }}>Prerequisites: Add subjects, assign faculty, and optionally add classrooms before generating.</span>
+                  <span style={{ fontSize: '0.78rem' }}>Prerequisites: add subjects with credits, assign faculty where possible, and optionally add classrooms before generating.</span>
                 </div>
                 <button type="submit" className="ds-btn ds-btn-primary" disabled={generating || !dept} style={{ width: '100%', justifyContent: 'center', padding: '0.8rem', background: generating ? 'rgba(124,58,237,0.5)' : 'linear-gradient(135deg, #7c3aed, #ec4899)' }}>
                   {generating ? (
@@ -357,6 +446,117 @@ export default function AISchedulingPage() {
               </div>
             </div>
           </div>
+
+          {result?.candidates?.length > 0 && (
+            <div className="ds-card ds-fade-in" style={{ marginTop: '1.5rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                <div>
+                  <h3 style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, color: '#1c0a00', marginBottom: 4, fontSize: '1rem' }}>Choose One Of 3 Timetables</h3>
+                  <p style={{ margin: 0, fontSize: '0.78rem', color: '#9a7b6a' }}>The timetable is saved to the live database only after you fix one option.</p>
+                </div>
+                {result.finalizedCandidateId && (
+                  <span className="ds-badge ds-badge-green">Fixed: {result.candidates.find((c: any) => c.id === result.finalizedCandidateId)?.name || result.finalizedCandidateId}</span>
+                )}
+              </div>
+
+              <div className="ds-grid-3 ds-stagger" style={{ marginBottom: '1.25rem' }}>
+                {result.candidates.map((candidate: any) => {
+                  const isSelected = selectedCandidateId === candidate.id;
+                  const isFixed = result.finalizedCandidateId === candidate.id;
+                  return (
+                    <div key={candidate.id} style={{
+                      padding: '1rem',
+                      borderRadius: 14,
+                      border: isFixed ? '1px solid rgba(22,163,74,0.28)' : isSelected ? '1px solid rgba(124,58,237,0.25)' : '1px solid rgba(0,0,0,0.06)',
+                      background: isFixed ? 'rgba(22,163,74,0.04)' : isSelected ? 'rgba(124,58,237,0.04)' : 'rgba(255,248,240,0.72)',
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '0.8rem', gap: '0.5rem' }}>
+                        <div>
+                          <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 800, color: '#1c0a00', fontSize: '1rem' }}>{candidate.name}</div>
+                          <div style={{ fontSize: '0.74rem', color: '#9a7b6a' }}>{candidate.totalSlots} slots • {candidate.generationsRun} generations</div>
+                        </div>
+                        <span className={`ds-badge ${candidate.conflicts === 0 ? 'ds-badge-green' : 'ds-badge-amber'}`}>{candidate.conflicts} conflicts</span>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem', marginBottom: '0.8rem' }}>
+                        <div style={{ padding: '0.55rem', borderRadius: 10, background: 'rgba(255,255,255,0.76)' }}>
+                          <div style={{ fontSize: '0.65rem', color: '#9a7b6a', textTransform: 'uppercase', fontWeight: 700 }}>Fitness</div>
+                          <div style={{ fontWeight: 800, color: fitnessColor(candidate.fitness), fontFamily: "'Syne',sans-serif" }}>{candidate.fitness?.toFixed(1)}</div>
+                        </div>
+                        <div style={{ padding: '0.55rem', borderRadius: 10, background: 'rgba(255,255,255,0.76)' }}>
+                          <div style={{ fontSize: '0.65rem', color: '#9a7b6a', textTransform: 'uppercase', fontWeight: 700 }}>Rooms Used</div>
+                          <div style={{ fontWeight: 800, color: '#1c0a00', fontFamily: "'Syne',sans-serif" }}>{candidate.summary?.roomsUsed ?? 0}</div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
+                        <button className={`ds-btn ${isSelected ? 'ds-btn-primary' : 'ds-btn-outline'}`} onClick={() => setSelectedCandidateId(candidate.id)}>
+                          {isSelected ? 'Previewing' : 'Preview'}
+                        </button>
+                        <button
+                          className={isFixed ? 'ds-btn ds-btn-outline' : 'ds-btn ds-btn-primary'}
+                          disabled={!!result.finalizedCandidateId || finalizingCandidateId === candidate.id}
+                          onClick={() => handleFinalizeCandidate(candidate.id)}
+                        >
+                          {isFixed ? 'Fixed' : finalizingCandidateId === candidate.id ? 'Fixing...' : 'Fix This Timetable'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {selectedCandidate && (
+                <div style={{ borderTop: '1px solid rgba(0,0,0,0.05)', paddingTop: '1rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                    <div>
+                      <h4 style={{ margin: 0, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: '#1c0a00' }}>{selectedCandidate.name} Preview</h4>
+                      <p style={{ margin: '0.25rem 0 0', fontSize: '0.76rem', color: '#9a7b6a' }}>Review the slots before fixing this timetable into the live database.</p>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      {(selectedCandidate.summary?.slotsPerDay || []).map((item: any) => (
+                        <span key={item.day} className="ds-badge ds-badge-blue">{item.day.slice(0, 3)} {item.count}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+                    {Object.entries(groupCandidateSlots(selectedCandidate.slots || [])).sort(([a], [b]) => sortSections(a, b)).map(([yearKey, semesters]) => (
+                      <div key={yearKey}>
+                        <h4 style={{ margin: '0 0 0.65rem', fontFamily: "'Syne',sans-serif", color: '#1c0a00' }}>{yearKey}</h4>
+                        {Object.entries(semesters).sort(([a], [b]) => sortSections(a, b)).map(([semKey, byDay]) => (
+                          <section key={`${yearKey}-${semKey}`} style={{ borderTop: '1px solid rgba(0,0,0,0.05)', paddingTop: '0.75rem', marginBottom: '1rem' }}>
+                            <div style={{ marginBottom: '0.6rem' }}><span className="ds-badge ds-badge-blue">{semKey}</span></div>
+                            <div className="ds-grid-3" style={{ alignItems: 'start' }}>
+                              {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((day) => {
+                                const daySlots = (byDay[day] || []).sort((a: any, b: any) => String(a.start_time).localeCompare(String(b.start_time)));
+                                return (
+                                  <div key={day} style={{ padding: '0.85rem', borderRadius: 12, background: 'rgba(255,255,255,0.78)', border: '1px solid rgba(0,0,0,0.05)' }}>
+                                    <div style={{ fontWeight: 800, color: '#1c0a00', marginBottom: '0.6rem', fontFamily: "'Syne',sans-serif" }}>{day}</div>
+                                    {daySlots.length === 0 ? (
+                                      <div style={{ fontSize: '0.74rem', color: '#9a7b6a' }}>No classes</div>
+                                    ) : (
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                                        {daySlots.map((slot: any, idx: number) => (
+                                          <div key={`${day}-${idx}-${slot.subject_id}`} style={{ padding: '0.55rem 0.65rem', borderRadius: 10, background: 'rgba(249,115,22,0.05)', border: '1px solid rgba(249,115,22,0.12)' }}>
+                                            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#1c0a00' }}>{slot.start_time?.slice(0, 5)} - {slot.end_time?.slice(0, 5)}</div>
+                                            <div style={{ fontSize: '0.73rem', color: '#7c5a4a', marginTop: 2 }}>{slot.subject_code || slot.subject_name || slot.subject_id}</div>
+                                            <div style={{ fontSize: '0.73rem', color: '#7c5a4a', marginTop: 2 }}>Faculty: {slot.faculty_name || slot.faculty_id || 'Unassigned'}</div>
+                                            <div style={{ fontSize: '0.73rem', color: '#9a7b6a' }}>Room: {slot.room_name || slot.room || 'TBD'}</div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </section>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -559,17 +759,19 @@ export default function AISchedulingPage() {
               <div className="ds-empty"><div className="ds-empty-icon">📊</div><div className="ds-empty-title">No generations yet</div><div className="ds-empty-sub">Run the AI generator to see history</div></div>
             ) : (
               <table className="ds-table">
-                <thead><tr><th>Department</th><th>Year</th><th>Status</th><th>Fitness</th><th>Conflicts</th><th>Slots</th><th>Gens</th><th>Time</th></tr></thead>
+                <thead><tr><th>Department</th><th>Year</th><th>Status</th><th>Fixed</th><th>Fitness</th><th>Conflicts</th><th>Slots</th><th>Gens</th><th>Time</th><th></th></tr></thead>
                 <tbody>{history.map((g: any) => (
                   <tr key={g.id}>
                     <td style={{ fontWeight: 600 }}>{g.department}</td>
                     <td>{g.year || 'All'}</td>
                     <td><span className={`ds-badge ${g.status === 'completed' ? 'ds-badge-green' : g.status === 'running' ? 'ds-badge-amber' : 'ds-badge-red'}`}>{g.status}</span></td>
+                    <td>{g.config?.finalizedCandidateId ? <span className="ds-badge ds-badge-green">{g.config.finalizedCandidateId}</span> : <span className="ds-badge ds-badge-amber">Pending</span>}</td>
                     <td style={{ fontWeight: 600, color: fitnessColor(g.fitness_score || 0) }}>{g.fitness_score?.toFixed(1) ?? '—'}</td>
                     <td><span className={`ds-badge ${g.conflicts_remaining === 0 ? 'ds-badge-green' : 'ds-badge-red'}`}>{g.conflicts_remaining ?? '—'}</span></td>
                     <td>{g.total_slots_placed ?? '—'}</td>
                     <td>{g.generations_run ?? '—'}</td>
                     <td style={{ fontSize: '0.75rem', color: '#9a7b6a' }}>{new Date(g.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                    <td><button className="ds-btn ds-btn-ghost" onClick={() => handleOpenGeneration(g.id)}>View</button></td>
                   </tr>
                 ))}</tbody>
               </table>
