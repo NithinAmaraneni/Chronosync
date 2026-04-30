@@ -25,6 +25,7 @@ export default function ChatInterface() {
   const [selectedUser, setSelectedUser] = useState<UserInfo | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
+  const [typingUsers, setTypingUsers] = useState<Record<string, boolean>>({});
   const [inputText, setInputText] = useState('');
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -37,8 +38,9 @@ export default function ChatInterface() {
   useEffect(() => {
     selectedUserRef.current = selectedUser;
     if (selectedUser) {
-      // Clear unread counts for this user
-      setUnreadCounts(prev => ({ ...prev, [selectedUser.id]: 0 }));
+      // Clear unread counts for this user — key on user_id (short ID) to match socket senderId
+      const selectedShortId = (selectedUser as any).user_id || selectedUser.id;
+      setUnreadCounts(prev => ({ ...prev, [selectedShortId]: 0 }));
     }
   }, [selectedUser]);
 
@@ -92,16 +94,31 @@ export default function ChatInterface() {
     newSocket.on('new_message', (message: Message) => {
       console.log('Received new_message from socket:', message);
       setMessages(prev => {
-        // Prevent duplicates
+        // Prevent duplicates (handles both optimistic and server echo)
         if (prev.some(m => m.id === message.id)) return prev;
+        // Replace optimistic placeholder if it matches (same senderId + receiverId + text)
+        const optimisticIdx = prev.findIndex(
+          m => m.id.startsWith('optimistic_') &&
+               m.senderId === message.senderId &&
+               m.receiverId === message.receiverId &&
+               m.text === message.text
+        );
+        if (optimisticIdx !== -1) {
+          const updated = [...prev];
+          updated[optimisticIdx] = message;
+          return updated;
+        }
         return [...prev, message];
       });
 
-      // Handle unread counts
+      // Handle unread counts — key on senderId (short user_id) to match sidebar keys
       const currentlySelected = selectedUserRef.current;
-      const currentId = user?.id || (user as any)?.userId;
+      const currentId = (user as any)?.userId || user?.id;
       if (message.senderId !== currentId) {
-        if (!currentlySelected || currentlySelected.id !== message.senderId) {
+        const selectedShortId = currentlySelected
+          ? ((currentlySelected as any).user_id || currentlySelected.id)
+          : null;
+        if (!selectedShortId || selectedShortId !== message.senderId) {
           setUnreadCounts(prev => ({
             ...prev,
             [message.senderId]: (prev[message.senderId] || 0) + 1
@@ -162,15 +179,22 @@ export default function ChatInterface() {
       return;
     }
 
-    const messageData = {
-      senderId: senderId,
-      receiverId: (selectedUser as any).user_id || selectedUser.id,
-      text: inputText.trim(),
-    };
+    const receiverId = (selectedUser as any).user_id || selectedUser.id;
+    const text = inputText.trim();
 
-    // No optimistic update — server saves to DB and broadcasts back to sender
-    socket.emit('send_message', messageData);
+    // ── Optimistic update: show message immediately without waiting for server echo ──
+    const optimisticMsg: Message = {
+      id: `optimistic_${Date.now()}`,
+      senderId,
+      receiverId,
+      text,
+      timestamp: new Date().toISOString(),
+    };
+    setMessages(prev => [...prev, optimisticMsg]);
     setInputText('');
+
+    // Emit to server — server will persist & broadcast back with real DB id
+    socket.emit('send_message', { senderId, receiverId, text });
   };
 
   const currentUserId = (user as any)?.userId || user?.id;
@@ -181,6 +205,13 @@ export default function ChatInterface() {
   );
 
   return (
+    <>
+    <style>{`
+      @keyframes pulse-badge {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.2); }
+      }
+    `}</style>
     <div className="ds-card" style={{ display: 'flex', height: 'calc(100vh - 120px)', padding: 0, overflow: 'hidden', boxShadow: '0 10px 25px rgba(0,0,0,0.05)', borderRadius: '16px' }}>
       {/* Users List Sidebar */}
       <div style={{ width: '320px', borderRight: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', background: 'white' }}>
@@ -197,7 +228,9 @@ export default function ChatInterface() {
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {users.map(u => {
             const isSelected = selectedUser?.id === u.id;
-            const unreadCount = unreadCounts[u.id] || 0;
+            // Key on user_id (short ID like FAC20263368) — this matches socket senderId
+            const shortId = (u as any).user_id || u.id;
+            const unreadCount = unreadCounts[shortId] || 0;
             return (
               <div
                 key={u.id}
@@ -206,40 +239,47 @@ export default function ChatInterface() {
                   padding: '16px 20px',
                   cursor: 'pointer',
                   borderBottom: '1px solid #f3f4f6',
-                  background: isSelected ? '#fff7ed' : 'white',
-                  borderLeft: isSelected ? '4px solid #f97316' : '4px solid transparent',
+                  background: isSelected ? '#fff7ed' : unreadCount > 0 ? '#fffbf5' : 'white',
+                  borderLeft: isSelected ? '4px solid #f97316' : unreadCount > 0 ? '4px solid #fbbf24' : '4px solid transparent',
                   transition: 'all 0.2s ease',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '12px'
                 }}
               >
-                <div style={{ 
-                  width: 40, height: 40, borderRadius: '50%', 
-                  background: isSelected ? 'linear-gradient(135deg, #f97316, #ef4444)' : '#f3f4f6', 
-                  color: isSelected ? 'white' : '#6b7280', 
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', 
-                  fontWeight: 'bold', fontSize: '1.1rem', flexShrink: 0
-                }}>
-                  {u.full_name.charAt(0)}
+                <div style={{ position: 'relative', flexShrink: 0 }}>
+                  <div style={{ 
+                    width: 40, height: 40, borderRadius: '50%', 
+                    background: isSelected ? 'linear-gradient(135deg, #f97316, #ef4444)' : '#f3f4f6', 
+                    color: isSelected ? 'white' : '#6b7280', 
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                    fontWeight: 'bold', fontSize: '1.1rem',
+                  }}>
+                    {u.full_name.charAt(0)}
+                  </div>
+                  {unreadCount > 0 && (
+                    <div style={{
+                      position: 'absolute', top: -4, right: -4,
+                      background: '#ef4444', color: 'white', borderRadius: '99px',
+                      minWidth: '18px', height: '18px', padding: '0 5px',
+                      fontSize: '0.7rem', fontWeight: 700,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      boxShadow: '0 2px 6px rgba(239, 68, 68, 0.5)',
+                      border: '2px solid white',
+                      animation: 'pulse-badge 1.5s infinite',
+                    }}>
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </div>
+                  )}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, color: isSelected ? '#1f2937' : '#4b5563', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  <div style={{ fontWeight: unreadCount > 0 ? 700 : 600, color: isSelected ? '#1f2937' : '#4b5563', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {u.full_name}
                   </div>
-                  <div style={{ fontSize: '0.8rem', color: '#9ca3af', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {u.department || 'No Dept'}
+                  <div style={{ fontSize: '0.8rem', color: unreadCount > 0 ? '#f97316' : '#9ca3af', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: unreadCount > 0 ? 600 : 400 }}>
+                    {unreadCount > 0 ? `${unreadCount} new message${unreadCount > 1 ? 's' : ''}` : (u.department || 'No Dept')}
                   </div>
                 </div>
-                {unreadCount > 0 && (
-                  <div style={{
-                    background: '#ef4444', color: 'white', borderRadius: '99px',
-                    padding: '2px 8px', fontSize: '0.75rem', fontWeight: 600,
-                    boxShadow: '0 2px 4px rgba(239, 68, 68, 0.3)'
-                  }}>
-                    {unreadCount}
-                  </div>
-                )}
               </div>
             );
           })}
@@ -429,5 +469,6 @@ export default function ChatInterface() {
         )}
       </div>
     </div>
+    </>
   );
 }
