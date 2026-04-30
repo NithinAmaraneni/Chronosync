@@ -56,6 +56,39 @@ const seedAdmin = async () => {
 };
 
 /**
+ * Ensure chat-related tables exist in Supabase
+ */
+const setupChatTables = async () => {
+  // Use Supabase's rpc to run raw SQL (service role has permission)
+  const { error } = await supabase.rpc('exec_sql', {
+    sql: `
+      CREATE TABLE IF NOT EXISTS conversation_clears (
+        id            uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+        user_id       text NOT NULL,
+        other_user_id text NOT NULL,
+        cleared_at    timestamptz DEFAULT now(),
+        UNIQUE(user_id, other_user_id)
+      );
+    `
+  });
+
+  if (error) {
+    // exec_sql RPC may not exist — fall back to a direct test insert/select
+    console.warn('⚠️  Could not auto-create conversation_clears table via RPC.');
+    console.warn('   Please run this in your Supabase SQL Editor:');
+    console.warn(`   CREATE TABLE IF NOT EXISTS conversation_clears (
+     id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+     user_id text NOT NULL,
+     other_user_id text NOT NULL,
+     cleared_at timestamptz DEFAULT now(),
+     UNIQUE(user_id, other_user_id)
+   );`);
+  } else {
+    console.log('✅ conversation_clears table ready');
+  }
+};
+
+/**
  * Start server
  */
 const start = async () => {
@@ -67,6 +100,9 @@ const start = async () => {
 
   // Seed admin
   await seedAdmin();
+
+  // Ensure chat tables exist
+  await setupChatTables();
 
   const http = require('http');
   const { Server } = require('socket.io');
@@ -91,14 +127,22 @@ const start = async () => {
       socket.join(userId);
 
       // Fetch this user's clear records (one per conversation partner)
-      const { data: clears } = await supabase
-        .from('conversation_clears')
-        .select('other_user_id, cleared_at')
-        .eq('user_id', userId);
+      let clearMap = {};
+      try {
+        const { data: clears, error: clearError } = await supabase
+          .from('conversation_clears')
+          .select('other_user_id, cleared_at')
+          .eq('user_id', userId);
 
-      const clearMap = {};
-      for (const c of (clears || [])) {
-        clearMap[c.other_user_id] = c.cleared_at;
+        if (!clearError) {
+          for (const c of (clears || [])) {
+            clearMap[c.other_user_id] = c.cleared_at;
+          }
+        } else {
+          console.warn('[Socket] conversation_clears table not found — run the SQL migration to enable persistent chat clearing.');
+        }
+      } catch (e) {
+        console.warn('[Socket] Could not fetch conversation clears:', e.message);
       }
 
       // Fetch all messages for this user
