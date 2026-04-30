@@ -306,3 +306,208 @@
 
 /* ── Disabled state ── */
 .ds-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
+
+/* ═══════════════════════════════════════════════
+   Subjects Grid — Dept → Sem → Cards
+   ═══════════════════════════════════════════════ */
+
+/* ── Department filter pills ── */
+.ds-subjects-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 0.4rem 0.85rem; border-radius: 20px;
+  font-family: 'DM Sans', sans-serif; font-size: 0.76rem; font-weight: 600;
+  color: #7c5a4a; background: rgba(255,255,255,0.7);
+  border: 1px solid rgba(0,0,0,0.06); cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+.ds-subjects-pill:hover {
+  background: rgba(249,115,22,0.06); border-color: rgba(249,115,22,0.15);
+  color: #ea580c;
+}
+.ds-subjects-pill.active {
+  background: linear-gradient(135deg, #ea580c, #f97316); color: #fff;
+  border-color: rgba(234,88,12,0.4);
+  box-shadow: 0 2px 8px rgba(234,88,12,0.2);
+}
+
+/* ── Department sections container ── */
+.ds-subjects-departments {
+  display: flex; flex-direction: column; gap: 1.25rem;
+}
+
+/* ── Single department section ── */
+.ds-dept-section {
+  background: rgba(255,255,255,0.85);
+  border: 1px solid rgba(249,115,22,0.1);
+  border-radius: 18px;
+  overflow: hidden;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.03);
+  animation: fadeUp 0.4s ease both;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.ds-dept-section:hover {
+  box-shadow: 0 2px 6px rgba(0,0,0,0.05), 0 12px 32px rgba(0,0,0,0.05);
+}
+
+/* ── Department header (clickable) ── */
+.ds-dept-header {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; padding: 1.15rem 1.5rem;
+  background: none; border: none; cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  transition: background 0.2s;
+}
+.ds-dept-header:hover {
+  background: var(--dept-bg, rgba(249,115,22,0.03));
+}
+.ds-dept-header-left {
+  display: flex; align-items: center; gap: 12px;
+}
+.ds-dept-icon {
+  width: 44px; height: 44px; border-radius: 13px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.25rem; border: 1px solid;
+  flex-shrink: 0;
+}
+.ds-dept-title {
+  font-family: 'Syne', sans-serif; font-size: 1.05rem; font-weight: 700;
+  color: #1c0a00; margin: 0;
+}
+.ds-dept-meta {
+  font-size: 0.74rem; color: #9a7b6a; font-weight: 500;
+}
+.ds-dept-header-right {
+  display: flex; align-items: center; gap: 10px;
+}
+.ds-dept-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 30px; height: 26px; border-radius: 8px;
+  font-size: 0.75rem; font-weight: 700;
+  border: 1px solid; padding: 0 6px;
+}
+.ds-dept-chevron {
+  width: 18px; height: 18px;
+  transition: transform 0.3s ease;
+  transform: rotate(-90deg);
+}
+.ds-dept-chevron.open {
+  transform: rotate(0deg);
+}
+
+/* ── Department body (semesters) ── */
+.ds-dept-body {
+  padding: 0 1.5rem 1.25rem 1.5rem;
+  animation: fadeUp 0.3s ease both;
+}
+
+/* ── Semester section ── */
+.ds-sem-section {
+  margin-bottom: 1.25rem;
+}
+.ds-sem-section:last-child { margin-bottom: 0; }
+
+.ds-sem-header {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 0.85rem;
+}
+.ds-sem-line {
+  width: 3px; height: 16px; border-radius: 2px; flex-shrink: 0;
+}
+.ds-sem-label {
+  font-family: 'Syne', sans-serif; font-size: 0.82rem; font-weight: 700;
+  color: #4a3020; white-space: nowrap;
+}
+.ds-sem-count {
+  font-size: 0.7rem; color: #b89070; font-weight: 500; white-space: nowrap;
+}
+.ds-sem-line-rest {
+  flex: 1; height: 1px;
+}
+
+/* ── Subject cards grid ── */
+.ds-subjects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+/* ── Individual subject card ── */
+.ds-subject-card {
+  background: rgba(255,255,255,0.95);
+  border: 1px solid var(--card-border, rgba(249,115,22,0.1));
+  border-radius: 14px; padding: 1rem 1.1rem;
+  transition: all 0.25s ease;
+  animation: fadeUp 0.35s ease both;
+  position: relative;
+  overflow: hidden;
+}
+.ds-subject-card::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, var(--card-accent, #f97316), transparent);
+  opacity: 0; transition: opacity 0.25s;
+}
+.ds-subject-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.07);
+  border-color: var(--card-accent, rgba(249,115,22,0.25));
+}
+.ds-subject-card:hover::before { opacity: 1; }
+
+.ds-subject-card-top {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 0.6rem;
+}
+.ds-subject-code {
+  display: inline-flex; align-items: center;
+  padding: 0.2rem 0.55rem; border-radius: 7px;
+  font-size: 0.68rem; font-weight: 700;
+  border: 1px solid; letter-spacing: 0.02em;
+}
+.ds-subject-credits {
+  font-size: 0.68rem; font-weight: 600; color: #9a7b6a;
+  background: rgba(0,0,0,0.03); padding: 0.15rem 0.45rem;
+  border-radius: 6px;
+}
+.ds-subject-name {
+  font-family: 'DM Sans', sans-serif; font-size: 0.85rem; font-weight: 600;
+  color: #1c0a00; margin: 0 0 0.5rem 0;
+  line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ds-subject-card-bottom {
+  display: flex; align-items: center; gap: 8px;
+}
+.ds-subject-sem {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 0.68rem; color: #b89070; font-weight: 500;
+}
+
+/* ── Responsive ── */
+@media (max-width: 1024px) {
+  .ds-subjects-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  }
+}
+@media (max-width: 768px) {
+  .ds-subjects-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+  .ds-dept-header {
+    padding: 0.9rem 1rem;
+  }
+  .ds-dept-body {
+    padding: 0 1rem 1rem 1rem;
+  }
+  .ds-dept-title {
+    font-size: 0.92rem;
+  }
+}
+@media (max-width: 480px) {
+  .ds-subjects-grid {
+    grid-template-columns: 1fr;
+  }
+}
