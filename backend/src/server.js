@@ -59,22 +59,14 @@ const seedAdmin = async () => {
  * Ensure chat-related tables exist in Supabase
  */
 const setupChatTables = async () => {
-  // Use Supabase's rpc to run raw SQL (service role has permission)
-  const { error } = await supabase.rpc('exec_sql', {
-    sql: `
-      CREATE TABLE IF NOT EXISTS conversation_clears (
-        id            uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-        user_id       text NOT NULL,
-        other_user_id text NOT NULL,
-        cleared_at    timestamptz DEFAULT now(),
-        UNIQUE(user_id, other_user_id)
-      );
-    `
-  });
+  // Verify the conversation_clears table exists by running a simple query
+  const { error } = await supabase
+    .from('conversation_clears')
+    .select('id')
+    .limit(1);
 
   if (error) {
-    // exec_sql RPC may not exist — fall back to a direct test insert/select
-    console.warn('⚠️  Could not auto-create conversation_clears table via RPC.');
+    console.warn('⚠️  conversation_clears table not found.');
     console.warn('   Please run this in your Supabase SQL Editor:');
     console.warn(`   CREATE TABLE IF NOT EXISTS conversation_clears (
      id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
