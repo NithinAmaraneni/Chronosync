@@ -6,7 +6,7 @@ const supabase = require('./config/supabase');
 const { verifyEmailConfig } = require('./config/email');
 const { setEmailReady } = require('./services/emailService');
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
 /**
  * Seed the admin account if it doesn't exist

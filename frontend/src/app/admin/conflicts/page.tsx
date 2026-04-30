@@ -25,7 +25,7 @@ export default function ConflictDashboardPage() {
     try {
       const d = await api.getConflicts(dept || undefined);
       setConflicts(d.conflicts || []);
-      setStats(d.stats || {});
+      setStats({ total: 0, critical: 0, high: 0, medium: 0, low: 0, slotsAffected: 0, ...(d.stats || {}) });
       setSlotCount(d.slotCount || 0);
     } catch (err: any) {
       console.error(err);
@@ -179,7 +179,7 @@ export default function ConflictDashboardPage() {
         </div>
         <div className="ds-stat-card">
           <div className="ds-stat-icon" style={{ background: 'rgba(37,99,235,0.08)' }}>🔵</div>
-          <div className="ds-stat-value">{stats.medium + stats.low}</div>
+          <div className="ds-stat-value">{(stats.medium ?? 0) + (stats.low ?? 0)}</div>
           <div className="ds-stat-label">Medium + Low</div>
         </div>
       </div>
