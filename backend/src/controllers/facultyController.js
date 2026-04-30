@@ -302,6 +302,35 @@ const getLeaveImpact = async (req, res) => {
   }
 };
 
+// ── Get Students for Chat ──
+const getStudents = async (req, res) => {
+  try {
+    const { data: facultyProfile } = await supabase
+      .from('users')
+      .select('department')
+      .eq('id', req.user.id)
+      .single();
+
+    let query = supabase
+      .from('users')
+      .select('id, user_id, full_name, email, department')
+      .eq('role', 'student')
+      .eq('is_active', true);
+
+    if (facultyProfile && facultyProfile.department) {
+      query = query.eq('department', facultyProfile.department);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    res.json({ success: true, students: data || [] });
+  } catch (err) {
+    console.error('Get students error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 module.exports = {
   getMySubjects,
   getMyTimetable,
@@ -313,5 +342,6 @@ module.exports = {
   getMyBookings,
   updateBookingStatus,
   getLeaveImpact,
+  getStudents,
 };
 

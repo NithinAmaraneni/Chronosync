@@ -30,7 +30,8 @@ router.post('/leaves', [
 // Bookings
 router.get('/bookings', ctrl.getMyBookings);
 router.patch('/bookings/:id', [
-  body('status').isIn(['approved', 'rejected']).withMessage('Invalid status.'),
-], ctrl.updateBookingStatus);
+] , ctrl.updateBookingStatus);
+
+router.get('/students', ctrl.getStudents);
 
 module.exports = router;

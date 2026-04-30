@@ -68,9 +68,56 @@ const start = async () => {
   // Seed admin
   await seedAdmin();
 
-  app.listen(PORT, () => {
+  const http = require('http');
+  const { Server } = require('socket.io');
+  const server = http.createServer(app);
+  
+  const io = new Server(server, {
+    cors: {
+      origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+      credentials: true,
+    }
+  });
+
+  // Simple in-memory chat
+  const connectedUsers = new Map();
+  const messageHistory = [];
+
+  io.on('connection', (socket) => {
+    socket.on('register', (userId) => {
+      console.log(`[Socket] User registered: ${userId}`);
+      connectedUsers.set(userId, socket.id);
+      socket.join(userId); 
+      socket.emit('history', messageHistory.filter(m => m.senderId === userId || m.receiverId === userId));
+    });
+
+    socket.on('send_message', (data) => {
+      console.log(`[Socket] Message from ${data.senderId} to ${data.receiverId}: ${data.text}`);
+      const message = {
+        id: Date.now().toString(),
+        ...data,
+        timestamp: new Date().toISOString()
+      };
+      messageHistory.push(message);
+      
+      io.to(data.receiverId).emit('new_message', message);
+      io.to(data.senderId).emit('new_message', message);
+    });
+
+    socket.on('disconnect', () => {
+      for (const [userId, socketId] of connectedUsers.entries()) {
+        if (socketId === socket.id) {
+          connectedUsers.delete(userId);
+          break;
+        }
+      }
+    });
+  });
+
+  server.listen(PORT, () => {
     console.log(`\n✅ Server running on http://localhost:${PORT}`);
     console.log(`📡 API base: http://localhost:${PORT}/api`);
+    console.log(`💬 Chat active via Socket.IO`);
     console.log(`🏥 Health: http://localhost:${PORT}/api/health\n`);
   });
 };

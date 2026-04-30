@@ -78,7 +78,6 @@ class ApiClient {
   }
   async deactivateUser(id: string) { return this.request(`/admin/users/${id}`, { method: 'DELETE' }); }
   async getActivityLogs(page = 1) { return this.request(`/admin/activity-logs?page=${page}`); }
-  async getAnalytics() { return this.request('/admin/analytics'); }
   // ─── CSV Bulk Import ───
   async importStudentsCSV(file: File) { return this.uploadFile('/admin/import/students', file); }
   async importFacultyCSV(file: File) { return this.uploadFile('/admin/import/faculty', file); }
