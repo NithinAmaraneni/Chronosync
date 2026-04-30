@@ -16,14 +16,28 @@ const ResponsiveContainer = dynamic(() => import('recharts').then(m => m.Respons
 const PieChart = dynamic(() => import('recharts').then(m => m.PieChart), { ssr: false });
 const Pie = dynamic(() => import('recharts').then(m => m.Pie), { ssr: false });
 const Cell = dynamic(() => import('recharts').then(m => m.Cell), { ssr: false });
-const RadialBarChart = dynamic(() => import('recharts').then(m => m.RadialBarChart), { ssr: false });
-const RadialBar = dynamic(() => import('recharts').then(m => m.RadialBar), { ssr: false });
-const Legend = dynamic(() => import('recharts').then(m => m.Legend), { ssr: false });
-const AreaChart = dynamic(() => import('recharts').then(m => m.AreaChart), { ssr: false });
-const Area = dynamic(() => import('recharts').then(m => m.Area), { ssr: false });
 
 const PIE_COLORS = ['#f97316', '#ea580c', '#d97706', '#16a34a', '#2563eb', '#7c3aed', '#ec4899', '#14b8a6'];
-const HEATMAP_COLORS = ['#f0fdf4', '#bbf7d0', '#86efac', '#4ade80', '#22c55e', '#16a34a', '#15803d', '#166534'];
+
+const formatPercent = (v: unknown) => `${Number(v || 0)}%`;
+const formatClasses = (v: unknown) => `${Number(v || 0)} classes`;
+const formatKwh = (v: unknown) => `${Number(v || 0)} kWh`;
+
+const Gauge = ({ value, label, color, max = 100 }: { value: number; label: string; color: string; max?: number }) => {
+  const pct = Math.min((value / max) * 100, 100);
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <svg width="130" height="100" viewBox="0 0 130 100">
+        <path d="M 15 85 A 54 54 0 1 1 115 85" fill="none" stroke="rgba(0,0,0,0.06)" strokeWidth="10" strokeLinecap="round" />
+        <path d="M 15 85 A 54 54 0 1 1 115 85" fill="none" stroke={color} strokeWidth="10" strokeLinecap="round"
+          strokeDasharray={`${(pct / 100) * 254} 254`}
+          style={{ transition: 'stroke-dasharray 1s ease' }} />
+        <text x="65" y="62" textAnchor="middle" fontFamily="'Syne',sans-serif" fontWeight="800" fontSize="22" fill="#1c0a00">{value}%</text>
+        <text x="65" y="80" textAnchor="middle" fontFamily="'DM Sans',sans-serif" fontSize="9" fill="#9a7b6a" fontWeight="600">{label}</text>
+      </svg>
+    </div>
+  );
+};
 
 export default function AnalyticsPage() {
   const [data, setData] = useState<any>(null);
@@ -62,28 +76,8 @@ export default function AnalyticsPage() {
     return '#c2410c';
   };
 
-  // Gauge component
-  const Gauge = ({ value, label, color, max = 100 }: { value: number; label: string; color: string; max?: number }) => {
-    const pct = Math.min((value / max) * 100, 100);
-    const r = 54;
-    const c = 2 * Math.PI * r;
-    const offset = c - (pct / 100) * c * 0.75; // 270° arc
-    return (
-      <div style={{ textAlign: 'center' }}>
-        <svg width="130" height="100" viewBox="0 0 130 100">
-          <path d="M 15 85 A 54 54 0 1 1 115 85" fill="none" stroke="rgba(0,0,0,0.06)" strokeWidth="10" strokeLinecap="round" />
-          <path d="M 15 85 A 54 54 0 1 1 115 85" fill="none" stroke={color} strokeWidth="10" strokeLinecap="round"
-            strokeDasharray={`${(pct / 100) * 254} 254`}
-            style={{ transition: 'stroke-dasharray 1s ease' }} />
-          <text x="65" y="62" textAnchor="middle" fontFamily="'Syne',sans-serif" fontWeight="800" fontSize="22" fill="#1c0a00">{value}%</text>
-          <text x="65" y="80" textAnchor="middle" fontFamily="'DM Sans',sans-serif" fontSize="9" fill="#9a7b6a" fontWeight="600">{label}</text>
-        </svg>
-      </div>
-    );
-  };
-
   const DAYS_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const periods = [...new Set((data.heatmap || []).map((h: any) => h.period))];
+  const periods = [...new Set<string>((data.heatmap || []).map((h: any) => h.period))];
 
   return (
     <div>
@@ -263,7 +257,7 @@ export default function AnalyticsPage() {
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
                   <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 11, fill: '#9a7b6a' }} tickFormatter={(v: number) => `${v}%`} />
                   <YAxis dataKey="name" type="category" width={100} tick={{ fontSize: 11, fill: '#7c5a4a' }} />
-                  <Tooltip formatter={(v: number) => `${v}%`} contentStyle={{ borderRadius: 12, fontSize: 13 }} />
+                  <Tooltip formatter={formatPercent} contentStyle={{ borderRadius: 12, fontSize: 13 }} />
                   <Bar dataKey="usage" radius={[0, 6, 6, 0]} fill="#f97316">
                     {(data.roomUtilization || []).map((r: any, i: number) => (
                       <Cell key={i} fill={r.usage > 70 ? '#16a34a' : r.usage > 30 ? '#f97316' : r.usage > 0 ? '#d97706' : '#dc2626'} />
@@ -337,7 +331,7 @@ export default function AnalyticsPage() {
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
                   <XAxis type="number" tick={{ fontSize: 11, fill: '#9a7b6a' }} />
                   <YAxis dataKey="name" type="category" width={120} tick={{ fontSize: 11, fill: '#7c5a4a' }} />
-                  <Tooltip contentStyle={{ borderRadius: 12, fontSize: 13 }} formatter={(v: number) => `${v} classes`} />
+                  <Tooltip contentStyle={{ borderRadius: 12, fontSize: 13 }} formatter={formatClasses} />
                   <Bar dataKey="totalClasses" radius={[0, 6, 6, 0]}>
                     {(data.workloadData || []).map((f: any, i: number) => (
                       <Cell key={i} fill={f.totalClasses > data.avgWorkload * 1.5 ? '#dc2626' : f.totalClasses < data.avgWorkload * 0.5 ? '#2563eb' : '#7c3aed'} />
@@ -459,7 +453,7 @@ export default function AnalyticsPage() {
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
                     <XAxis dataKey="name" tick={{ fontSize: 12, fill: '#9a7b6a' }} />
                     <YAxis tick={{ fontSize: 11, fill: '#9a7b6a' }} width={45} tickFormatter={(v: number) => `${v}`} />
-                    <Tooltip formatter={(v: number) => `${v} kWh`} contentStyle={{ borderRadius: 12, fontSize: 13 }} />
+                    <Tooltip formatter={formatKwh} contentStyle={{ borderRadius: 12, fontSize: 13 }} />
                     <Bar dataKey="value" radius={[6, 6, 0, 0]}>
                       <Cell fill="#f97316" />
                       <Cell fill="#16a34a" />

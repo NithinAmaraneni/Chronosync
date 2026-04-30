@@ -3,6 +3,8 @@ import { useEffect, useState, useMemo, FormEvent } from 'react';
 import { api } from '@/lib/api';
 import CSVUpload from '@/components/CSVUpload';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 /* ── Department emoji map ── */
 const deptIcons: Record<string, string> = {
   'Computer Science': '💻', 'Electronics': '🔌', 'Mechanical': '⚙️',
@@ -36,6 +38,7 @@ export default function AdminSubjectsPage() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', code: '', department: '', credits: '3', semester: '' });
+  const [editingSubjectId, setEditingSubjectId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
   const [assignForm, setAssignForm] = useState({ faculty_id: '', subject_id: '' });
@@ -56,12 +59,51 @@ export default function AdminSubjectsPage() {
   const handleCreate = async (e: FormEvent) => {
     e.preventDefault(); setSaving(true); setMsg('');
     try {
-      await api.createSubject({ ...form, credits: parseInt(form.credits) });
-      setMsg('Subject created!'); setShowForm(false);
+      if (editingSubjectId) {
+        await api.updateSubject(editingSubjectId, { ...form, credits: parseInt(form.credits) });
+        setMsg('Subject updated!');
+      } else {
+        await api.createSubject({ ...form, credits: parseInt(form.credits) });
+        setMsg('Subject created!');
+      }
+      setShowForm(false);
+      setEditingSubjectId(null);
       setForm({ name: '', code: '', department: '', credits: '3', semester: '' });
       load();
     } catch (err: any) { setMsg(err.message || 'Failed'); }
     finally { setSaving(false); }
+  };
+
+  const openCreate = () => {
+    setEditingSubjectId(null);
+    setForm({ name: '', code: '', department: '', credits: '3', semester: '' });
+    setShowForm(!showForm);
+    setShowAssign(false);
+  };
+
+  const openEdit = (subject: any) => {
+    setEditingSubjectId(subject.id);
+    setForm({
+      name: subject.name || '',
+      code: subject.code || '',
+      department: subject.department || '',
+      credits: String(subject.credits || 3),
+      semester: subject.semester || '',
+    });
+    setShowForm(true);
+    setShowAssign(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleDeleteSubject = async (subject: any) => {
+    if (!confirm(`Delete ${subject.code} — ${subject.name}?`)) return;
+    try {
+      await api.deleteSubject(subject.id);
+      setMsg('Subject deleted.');
+      load();
+    } catch (err: any) {
+      setMsg(err.message || 'Failed to delete subject.');
+    }
   };
 
   const handleAssign = async (e: FormEvent) => {
@@ -142,7 +184,7 @@ export default function AdminSubjectsPage() {
             <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
             Assign
           </button>
-          <button className="ds-btn ds-btn-primary" onClick={() => { setShowForm(!showForm); setShowAssign(false); }}>
+          <button className="ds-btn ds-btn-primary" onClick={openCreate}>
             <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
             Add Subject
           </button>
@@ -156,7 +198,7 @@ export default function AdminSubjectsPage() {
       {/* ── Create Form ── */}
       {showForm && (
         <div className="ds-card ds-fade-in" style={{ marginBottom: '1.5rem' }}>
-          <h3 style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, color: '#1c0a00', marginBottom: '1rem' }}>New Subject</h3>
+          <h3 style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, color: '#1c0a00', marginBottom: '1rem' }}>{editingSubjectId ? 'Edit Subject' : 'New Subject'}</h3>
           <form onSubmit={handleCreate}>
             <div className="ds-grid-2">
               <div className="ds-form-group"><label className="ds-label">Subject Name</label><input className="ds-input" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g., Data Structures" required /></div>
@@ -168,8 +210,8 @@ export default function AdminSubjectsPage() {
               <div className="ds-form-group"><label className="ds-label">Semester</label><input className="ds-input" value={form.semester} onChange={e => setForm({ ...form, semester: e.target.value })} placeholder="e.g., Sem 3" /></div>
             </div>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button type="submit" className="ds-btn ds-btn-primary" disabled={saving}>{saving ? 'Creating...' : 'Create Subject'}</button>
-              <button type="button" className="ds-btn ds-btn-ghost" onClick={() => setShowForm(false)}>Cancel</button>
+              <button type="submit" className="ds-btn ds-btn-primary" disabled={saving}>{saving ? 'Saving...' : editingSubjectId ? 'Save Subject' : 'Create Subject'}</button>
+              <button type="button" className="ds-btn ds-btn-ghost" onClick={() => { setShowForm(false); setEditingSubjectId(null); }}>Cancel</button>
             </div>
           </form>
         </div>
@@ -352,9 +394,15 @@ export default function AdminSubjectsPage() {
                                 <span className="ds-subject-code" style={{ background: color.bg, color: color.text, borderColor: color.border }}>
                                   {s.code}
                                 </span>
-                                <span className="ds-subject-credits" title="Credits">
-                                  {s.credits} cr
-                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                  <span className="ds-subject-credits" title="Credits">{s.credits} cr</span>
+                                  <button className="ds-btn ds-btn-ghost" style={{ padding: '0.18rem' }} onClick={() => openEdit(s)} title="Edit subject">
+                                    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 13, height: 13 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                                  </button>
+                                  <button className="ds-btn ds-btn-ghost" style={{ padding: '0.18rem' }} onClick={() => handleDeleteSubject(s)} title="Delete subject">
+                                    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 13, height: 13 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                  </button>
+                                </div>
                               </div>
                               <h4 className="ds-subject-name">{s.name}</h4>
                               <div className="ds-subject-card-bottom">

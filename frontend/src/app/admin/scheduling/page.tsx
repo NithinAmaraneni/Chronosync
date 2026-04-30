@@ -23,8 +23,12 @@ export default function AISchedulingPage() {
   // Forms
   const [roomForm, setRoomForm] = useState({ name: '', building: '', capacity: '60', room_type: 'lecture' });
   const [showRoomForm, setShowRoomForm] = useState(false);
+  const [editingRoomId, setEditingRoomId] = useState<string | null>(null);
+  const [timeSlotForm, setTimeSlotForm] = useState({ slot_number: '1', start_time: '09:00', end_time: '10:00', slot_label: '', is_break: false });
+  const [showTimeSlotForm, setShowTimeSlotForm] = useState(false);
   const [constForm, setConstForm] = useState({ constraint_type: 'max_hours_per_day', target_type: 'global', value: '5', priority: '5' });
   const [showConstForm, setShowConstForm] = useState(false);
+  const [editingConstraintId, setEditingConstraintId] = useState<string | null>(null);
   const [msg, setMsg] = useState('');
 
   const logRef = useRef<HTMLDivElement>(null);
@@ -76,8 +80,15 @@ export default function AISchedulingPage() {
   const handleAddRoom = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await api.createClassroom({ ...roomForm, capacity: parseInt(roomForm.capacity) });
+      if (editingRoomId) {
+        await api.updateClassroom(editingRoomId, { ...roomForm, capacity: parseInt(roomForm.capacity) });
+        setMsg('Classroom updated.');
+      } else {
+        await api.createClassroom({ ...roomForm, capacity: parseInt(roomForm.capacity) });
+        setMsg('Classroom added.');
+      }
       setShowRoomForm(false);
+      setEditingRoomId(null);
       setRoomForm({ name: '', building: '', capacity: '60', room_type: 'lecture' });
       const d = await api.getClassrooms();
       setClassrooms(d.classrooms || []);
@@ -85,24 +96,91 @@ export default function AISchedulingPage() {
   };
 
   const handleDeleteRoom = async (id: string) => {
+    if (!confirm('Deactivate this classroom? Affected slots may be reassigned.')) return;
     await api.deleteClassroom(id);
-    setClassrooms(prev => prev.filter(r => r.id !== id));
+    const d = await api.getClassrooms();
+    setClassrooms(d.classrooms || []);
+  };
+
+  const openEditRoom = (room: any) => {
+    setEditingRoomId(room.id);
+    setRoomForm({
+      name: room.name || '',
+      building: room.building || '',
+      capacity: String(room.capacity || 60),
+      room_type: room.room_type || 'lecture',
+    });
+    setShowRoomForm(true);
+  };
+
+  const handleSaveTimeSlot = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      await api.upsertTimeSlot({
+        ...timeSlotForm,
+        slot_number: parseInt(timeSlotForm.slot_number),
+      });
+      setShowTimeSlotForm(false);
+      setTimeSlotForm({ slot_number: '1', start_time: '09:00', end_time: '10:00', slot_label: '', is_break: false });
+      const d = await api.getTimeSlotTemplates();
+      setTimeSlots(d.timeSlots || []);
+      setMsg('Time slot saved.');
+    } catch (err: any) { setMsg(err.message); }
+  };
+
+  const openEditTimeSlot = (slot: any) => {
+    setTimeSlotForm({
+      slot_number: String(slot.slot_number || 1),
+      start_time: slot.start_time?.slice(0, 5) || '09:00',
+      end_time: slot.end_time?.slice(0, 5) || '10:00',
+      slot_label: slot.slot_label || '',
+      is_break: !!slot.is_break,
+    });
+    setShowTimeSlotForm(true);
+  };
+
+  const handleDeleteTimeSlot = async (id: string) => {
+    if (!confirm('Delete this time slot template?')) return;
+    try {
+      await api.deleteTimeSlot(id);
+      setTimeSlots(prev => prev.filter(s => s.id !== id));
+      setMsg('Time slot deleted.');
+    } catch (err: any) { setMsg(err.message); }
   };
 
   // ── Constraint CRUD ──
   const handleAddConstraint = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await api.createSchedulingConstraint({ ...constForm, priority: parseInt(constForm.priority) });
+      if (editingConstraintId) {
+        await api.updateSchedulingConstraint(editingConstraintId, { ...constForm, priority: parseInt(constForm.priority) });
+        setMsg('Constraint updated.');
+      } else {
+        await api.createSchedulingConstraint({ ...constForm, priority: parseInt(constForm.priority) });
+        setMsg('Constraint added.');
+      }
       setShowConstForm(false);
+      setEditingConstraintId(null);
       const d = await api.getSchedulingConstraints();
       setConstraints(d.constraints || []);
     } catch (err: any) { setMsg(err.message); }
   };
 
   const handleDeleteConstraint = async (id: string) => {
+    if (!confirm('Delete this constraint?')) return;
     await api.deleteSchedulingConstraint(id);
     setConstraints(prev => prev.filter(c => c.id !== id));
+  };
+
+  const openEditConstraint = (constraint: any) => {
+    setEditingConstraintId(constraint.id);
+    setConstForm({
+      constraint_type: constraint.constraint_type || 'max_hours_per_day',
+      target_type: constraint.target_type || 'global',
+      value: constraint.value || '',
+      priority: String(constraint.priority || 5),
+    });
+    setShowConstForm(true);
   };
 
   // ── Fitness visual ──
@@ -302,7 +380,7 @@ export default function AISchedulingPage() {
               />
               <button className="ds-btn ds-btn-primary" onClick={() => setShowRoomForm(!showRoomForm)}>
                 <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                Add Room
+                {editingRoomId ? 'Edit Room' : 'Add Room'}
               </button>
             </div>
           </div>
@@ -316,8 +394,8 @@ export default function AISchedulingPage() {
                 <div className="ds-form-group"><label className="ds-label">Type</label><select className="ds-select" value={roomForm.room_type} onChange={e => setRoomForm({ ...roomForm, room_type: e.target.value })}><option value="lecture">Lecture</option><option value="lab">Lab</option><option value="seminar">Seminar</option><option value="auditorium">Auditorium</option></select></div>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button type="submit" className="ds-btn ds-btn-primary">Add Room</button>
-                <button type="button" className="ds-btn ds-btn-ghost" onClick={() => setShowRoomForm(false)}>Cancel</button>
+                <button type="submit" className="ds-btn ds-btn-primary">{editingRoomId ? 'Save Room' : 'Add Room'}</button>
+                <button type="button" className="ds-btn ds-btn-ghost" onClick={() => { setShowRoomForm(false); setEditingRoomId(null); }}>Cancel</button>
               </div>
             </form>
           )}
@@ -331,9 +409,14 @@ export default function AISchedulingPage() {
                   <div key={r.id} style={{ padding: '0.9rem', background: 'rgba(255,248,240,0.8)', border: '1px solid rgba(249,115,22,0.1)', borderRadius: 13, position: 'relative' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
                       <span style={{ fontWeight: 700, color: '#1c0a00', fontSize: '0.9rem' }}>{r.name}</span>
-                      <button className="ds-btn ds-btn-ghost" style={{ padding: '0.2rem' }} onClick={() => handleDeleteRoom(r.id)}>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                      <button className="ds-btn ds-btn-ghost" style={{ padding: '0.2rem' }} onClick={() => openEditRoom(r)} title="Edit room">
+                        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 13, height: 13 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                      </button>
+                      <button className="ds-btn ds-btn-ghost" style={{ padding: '0.2rem' }} onClick={() => handleDeleteRoom(r.id)} title="Deactivate room">
                         <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 13, height: 13 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                       </button>
+                      </div>
                     </div>
                     <div style={{ fontSize: '0.75rem', color: '#9a7b6a' }}>{r.building || 'N/A'} • Cap: {r.capacity}</div>
                     <div style={{ display: 'flex', gap: '0.3rem', marginTop: '0.4rem' }}>
@@ -354,7 +437,28 @@ export default function AISchedulingPage() {
       {/* ══════════════════════════════════════════ */}
       {activeTab === 'timeslots' && (
         <div className="ds-fade-in">
-          <p className="ds-page-sub" style={{ marginBottom: '1rem' }}>Standard time periods used to build the timetable grid</p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', gap: '0.5rem' }}>
+            <p className="ds-page-sub" style={{ margin: 0 }}>Standard time periods used to build the timetable grid</p>
+            <button className="ds-btn ds-btn-primary" onClick={() => setShowTimeSlotForm(!showTimeSlotForm)}>
+              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+              Add / Edit Slot
+            </button>
+          </div>
+          {showTimeSlotForm && (
+            <form onSubmit={handleSaveTimeSlot} className="ds-card ds-fade-in" style={{ marginBottom: '1rem' }}>
+              <div className="ds-grid-4">
+                <div className="ds-form-group"><label className="ds-label">Slot Number</label><input className="ds-input" type="number" min="1" value={timeSlotForm.slot_number} onChange={e => setTimeSlotForm({ ...timeSlotForm, slot_number: e.target.value })} required /></div>
+                <div className="ds-form-group"><label className="ds-label">Start</label><input className="ds-input" type="time" value={timeSlotForm.start_time} onChange={e => setTimeSlotForm({ ...timeSlotForm, start_time: e.target.value })} required /></div>
+                <div className="ds-form-group"><label className="ds-label">End</label><input className="ds-input" type="time" value={timeSlotForm.end_time} onChange={e => setTimeSlotForm({ ...timeSlotForm, end_time: e.target.value })} required /></div>
+                <div className="ds-form-group"><label className="ds-label">Label</label><input className="ds-input" value={timeSlotForm.slot_label} onChange={e => setTimeSlotForm({ ...timeSlotForm, slot_label: e.target.value })} placeholder="Period 1" /></div>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: '1rem', fontSize: '0.82rem', color: '#1c0a00' }}><input type="checkbox" checked={timeSlotForm.is_break} onChange={e => setTimeSlotForm({ ...timeSlotForm, is_break: e.target.checked })} /> Break / non-teaching period</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button type="submit" className="ds-btn ds-btn-primary">Save Slot</button>
+                <button type="button" className="ds-btn ds-btn-ghost" onClick={() => setShowTimeSlotForm(false)}>Cancel</button>
+              </div>
+            </form>
+          )}
           <div className="ds-card">
             {timeSlots.length === 0 ? (
               <div className="ds-empty"><div className="ds-empty-icon">⏰</div><div className="ds-empty-title">No slots defined</div><div className="ds-empty-sub">Run the v3 schema SQL to seed default time slots</div></div>
@@ -368,6 +472,12 @@ export default function AISchedulingPage() {
                       <div style={{ fontSize: '0.75rem', color: '#9a7b6a' }}>{s.start_time?.slice(0, 5)} – {s.end_time?.slice(0, 5)}</div>
                     </div>
                     <span className={`ds-badge ${s.is_break ? 'ds-badge-amber' : 'ds-badge-blue'}`}>{s.is_break ? 'Break' : 'Class'}</span>
+                    <button className="ds-btn ds-btn-ghost" style={{ padding: '0.2rem' }} onClick={() => openEditTimeSlot(s)} title="Edit time slot">
+                      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 13, height: 13 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                    </button>
+                    <button className="ds-btn ds-btn-ghost" style={{ padding: '0.2rem' }} onClick={() => handleDeleteTimeSlot(s.id)} title="Delete time slot">
+                      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 13, height: 13 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                    </button>
                   </div>
                 ))}
               </div>
@@ -383,9 +493,9 @@ export default function AISchedulingPage() {
         <div className="ds-fade-in">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <p className="ds-page-sub" style={{ margin: 0 }}>Scheduling rules the AI engine respects</p>
-            <button className="ds-btn ds-btn-primary" onClick={() => setShowConstForm(!showConstForm)}>
+            <button className="ds-btn ds-btn-primary" onClick={() => { setEditingConstraintId(null); setConstForm({ constraint_type: 'max_hours_per_day', target_type: 'global', value: '5', priority: '5' }); setShowConstForm(!showConstForm); }}>
               <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-              Add Constraint
+              {editingConstraintId ? 'Edit Constraint' : 'Add Constraint'}
             </button>
           </div>
 
@@ -398,8 +508,8 @@ export default function AISchedulingPage() {
                 <div className="ds-form-group"><label className="ds-label">Priority (1-10)</label><input className="ds-input" type="number" min="1" max="10" value={constForm.priority} onChange={e => setConstForm({ ...constForm, priority: e.target.value })} /></div>
               </div>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button type="submit" className="ds-btn ds-btn-primary">Add</button>
-                <button type="button" className="ds-btn ds-btn-ghost" onClick={() => setShowConstForm(false)}>Cancel</button>
+                <button type="submit" className="ds-btn ds-btn-primary">{editingConstraintId ? 'Save' : 'Add'}</button>
+                <button type="button" className="ds-btn ds-btn-ghost" onClick={() => { setShowConstForm(false); setEditingConstraintId(null); }}>Cancel</button>
               </div>
             </form>
           )}
@@ -423,9 +533,13 @@ export default function AISchedulingPage() {
                         <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#1c0a00' }}>{c.priority}</span>
                       </div>
                     </td>
-                    <td><button className="ds-btn ds-btn-ghost" style={{ padding: '0.2rem' }} onClick={() => handleDeleteConstraint(c.id)}>
+                    <td><div style={{ display: 'flex', gap: 4 }}>
+                    <button className="ds-btn ds-btn-ghost" style={{ padding: '0.2rem' }} onClick={() => openEditConstraint(c)} title="Edit constraint">
+                      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 13, height: 13 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                    </button>
+                    <button className="ds-btn ds-btn-ghost" style={{ padding: '0.2rem' }} onClick={() => handleDeleteConstraint(c.id)} title="Delete constraint">
                       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 13, height: 13 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                    </button></td>
+                    </button></div></td>
                   </tr>
                 ))}</tbody>
               </table>

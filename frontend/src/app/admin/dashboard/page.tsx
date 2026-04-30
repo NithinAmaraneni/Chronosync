@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 export default function AdminDashboard() {
   const { user } = useAuth();
   const [analytics, setAnalytics] = useState<any>(null);

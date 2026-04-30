@@ -64,13 +64,14 @@ const bulkImportStudents = async (req, res) => {
         }
 
         const otp = generateOTP();
-        const hashedPassword = await bcrypt.hash(otp, 12);
+        const otpHash = await bcrypt.hash(otp, 12);
 
         const { error } = await supabase.from('users').insert({
           user_id: userId,
           full_name: fullName,
           email,
-          password: hashedPassword,
+          password_hash: '',
+          otp: otpHash,
           role: 'student',
           degree_course: degreeCourse,
           department,
@@ -78,6 +79,7 @@ const bulkImportStudents = async (req, res) => {
           phone: phone || null,
           is_first_login: true,
           is_active: true,
+          email_verified: false,
         });
 
         if (error) throw error;
@@ -141,18 +143,20 @@ const bulkImportFaculty = async (req, res) => {
         }
 
         const otp = generateOTP();
-        const hashedPassword = await bcrypt.hash(otp, 12);
+        const otpHash = await bcrypt.hash(otp, 12);
 
         const { error } = await supabase.from('users').insert({
           user_id: userId,
           full_name: fullName,
           email,
-          password: hashedPassword,
+          password_hash: '',
+          otp: otpHash,
           role: 'faculty',
           department,
           subjects: subjects.length > 0 ? subjects : null,
           is_first_login: true,
           is_active: true,
+          email_verified: false,
         });
 
         if (error) throw error;

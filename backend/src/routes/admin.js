@@ -45,6 +45,8 @@ router.post('/students', createStudentValidation, validate, adminController.crea
 router.post('/faculty', createFacultyValidation, validate, adminController.createFaculty);
 router.get('/users', adminController.getUsers);
 router.get('/users/:id', adminController.getUserById);
+router.patch('/users/:id', adminController.updateUser);
+router.patch('/users/:id/reactivate', adminController.reactivateUser);
 router.delete('/users/:id', adminController.deactivateUser);
 router.get('/activity-logs', adminController.getActivityLogs);
 
@@ -55,6 +57,12 @@ router.post('/subjects', [
   body('code').trim().notEmpty().withMessage('Subject code is required.'),
   body('department').trim().notEmpty().withMessage('Department is required.'),
 ], validate, adminController.createSubject);
+router.patch('/subjects/:id', [
+  body('name').trim().notEmpty().withMessage('Subject name is required.'),
+  body('code').trim().notEmpty().withMessage('Subject code is required.'),
+  body('department').trim().notEmpty().withMessage('Department is required.'),
+], validate, adminController.updateSubject);
+router.delete('/subjects/:id', adminController.deleteSubject);
 router.post('/assign-subject', [
   body('faculty_id').notEmpty(),
   body('subject_id').notEmpty(),
@@ -70,6 +78,15 @@ router.post('/timetable', [
   body('start_time').notEmpty(),
   body('end_time').notEmpty(),
 ], validate, adminController.createTimetableSlot);
+router.patch('/timetable/:id', [
+  body('subject_id').notEmpty(),
+  body('faculty_id').notEmpty(),
+  body('department').notEmpty(),
+  body('day').notEmpty(),
+  body('start_time').notEmpty(),
+  body('end_time').notEmpty(),
+], validate, adminController.updateTimetableSlot);
+router.delete('/timetable/:id', adminController.deleteTimetableSlot);
 
 // Leave management
 router.get('/leaves', adminController.getLeaveRequests);

@@ -3,6 +3,8 @@ import { useState, FormEvent } from 'react';
 import { api } from '@/lib/api';
 import CSVUpload from '@/components/CSVUpload';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 export default function AddFacultyPage() {
   const [form, setForm] = useState({ fullName: '', email: '', department: '', subjects: '' });
   const [isLoading, setIsLoading] = useState(false);

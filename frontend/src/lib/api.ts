@@ -76,6 +76,8 @@ class ApiClient {
     const q = sp.toString();
     return this.request(`/admin/users${q ? `?${q}` : ''}`);
   }
+  async updateUser(id: string, data: any) { return this.request(`/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }); }
+  async reactivateUser(id: string) { return this.request(`/admin/users/${id}/reactivate`, { method: 'PATCH' }); }
   async deactivateUser(id: string) { return this.request(`/admin/users/${id}`, { method: 'DELETE' }); }
   async getActivityLogs(page = 1) { return this.request(`/admin/activity-logs?page=${page}`); }
   // ─── CSV Bulk Import ───
@@ -85,6 +87,8 @@ class ApiClient {
   async importClassroomsCSV(file: File) { return this.uploadFile('/admin/import/classrooms', file); }
   async getSubjects() { return this.request('/admin/subjects'); }
   async createSubject(data: any) { return this.request('/admin/subjects', { method: 'POST', body: JSON.stringify(data) }); }
+  async updateSubject(id: string, data: any) { return this.request(`/admin/subjects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }); }
+  async deleteSubject(id: string) { return this.request(`/admin/subjects/${id}`, { method: 'DELETE' }); }
   async assignSubject(facultyId: string, subjectId: string) {
     return this.request('/admin/assign-subject', { method: 'POST', body: JSON.stringify({ faculty_id: facultyId, subject_id: subjectId }) });
   }
@@ -94,6 +98,12 @@ class ApiClient {
   }
   async createTimetableSlot(data: any) {
     return this.request('/admin/timetable', { method: 'POST', body: JSON.stringify(data) });
+  }
+  async updateTimetableSlot(id: string, data: any) {
+    return this.request(`/admin/timetable/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+  async deleteTimetableSlot(id: string) {
+    return this.request(`/admin/timetable/${id}`, { method: 'DELETE' });
   }
   async getTimetableSlots(department?: string) {
     const q = department ? `?department=${department}` : '';
@@ -130,11 +140,14 @@ class ApiClient {
   // ─── Scheduling (Admin) ───
   async getClassrooms() { return this.request('/scheduling/classrooms'); }
   async createClassroom(data: any) { return this.request('/scheduling/classrooms', { method: 'POST', body: JSON.stringify(data) }); }
+  async updateClassroom(id: string, data: any) { return this.request(`/scheduling/classrooms/${id}`, { method: 'PATCH', body: JSON.stringify(data) }); }
   async deleteClassroom(id: string) { return this.request(`/scheduling/classrooms/${id}`, { method: 'DELETE' }); }
   async getTimeSlotTemplates() { return this.request('/scheduling/time-slots'); }
   async upsertTimeSlot(data: any) { return this.request('/scheduling/time-slots', { method: 'POST', body: JSON.stringify(data) }); }
+  async deleteTimeSlot(id: string) { return this.request(`/scheduling/time-slots/${id}`, { method: 'DELETE' }); }
   async getSchedulingConstraints() { return this.request('/scheduling/constraints'); }
   async createSchedulingConstraint(data: any) { return this.request('/scheduling/constraints', { method: 'POST', body: JSON.stringify(data) }); }
+  async updateSchedulingConstraint(id: string, data: any) { return this.request(`/scheduling/constraints/${id}`, { method: 'PATCH', body: JSON.stringify(data) }); }
   async deleteSchedulingConstraint(id: string) { return this.request(`/scheduling/constraints/${id}`, { method: 'DELETE' }); }
   async triggerTimetableGeneration(data: any) { return this.request('/scheduling/generate', { method: 'POST', body: JSON.stringify(data) }); }
   async getGenerationHistory() { return this.request('/scheduling/history'); }

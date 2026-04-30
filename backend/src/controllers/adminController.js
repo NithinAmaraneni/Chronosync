@@ -20,6 +20,82 @@ const logActivity = async (adminId, action, targetUserId, details) => {
   }
 };
 
+const syncFacultySubjects = async (facultyId, department, subjects = []) => {
+  const subjectNames = (Array.isArray(subjects) ? subjects : [])
+    .map((s) => String(s).trim())
+    .filter(Boolean);
+
+  if (subjectNames.length === 0) return;
+
+  const filters = subjectNames.flatMap((s) => [`name.ilike.${s}`, `code.ilike.${s}`]);
+  let query = supabase
+    .from('subjects')
+    .select('id, name, code')
+    .or(filters.join(','));
+
+  if (department) query = query.eq('department', department);
+
+  const { data: matches, error } = await query;
+  if (error || !matches?.length) return;
+
+  const rows = matches.map((subject) => ({
+    faculty_id: facultyId,
+    subject_id: subject.id,
+  }));
+
+  await supabase
+    .from('faculty_subjects')
+    .upsert(rows, { onConflict: 'faculty_id,subject_id', ignoreDuplicates: true });
+};
+
+const hasTimeOverlap = (aStart, aEnd, bStart, bEnd) => {
+  const norm = (v) => (String(v || '').length === 5 ? `${v}:00` : String(v || ''));
+  return norm(aStart) < norm(bEnd) && norm(aEnd) > norm(bStart);
+};
+
+const validateTimetableSlotConflicts = async (slot, excludeId = null) => {
+  if (slot.start_time >= slot.end_time) {
+    return 'End time must be after start time.';
+  }
+
+  let query = supabase
+    .from('timetable_slots')
+    .select('id, subject_id, faculty_id, department, year, day, start_time, end_time, room, subject:subjects(name, code), faculty:users!timetable_slots_faculty_id_fkey(full_name)')
+    .eq('day', slot.day);
+
+  if (excludeId) query = query.neq('id', excludeId);
+
+  const { data: existing, error } = await query;
+  if (error) throw error;
+
+  const conflicts = (existing || []).filter((candidate) => (
+    hasTimeOverlap(slot.start_time, slot.end_time, candidate.start_time, candidate.end_time)
+  ));
+
+  const facultyConflict = conflicts.find((candidate) => candidate.faculty_id === slot.faculty_id);
+  if (facultyConflict) {
+    return `Faculty already has ${facultyConflict.subject?.name || 'a class'} at this time.`;
+  }
+
+  const roomName = String(slot.room || '').trim().toLowerCase();
+  if (roomName) {
+    const roomConflict = conflicts.find((candidate) => String(candidate.room || '').trim().toLowerCase() === roomName);
+    if (roomConflict) {
+      return `Room ${slot.room} is already booked at this time.`;
+    }
+  }
+
+  const batchConflict = conflicts.find((candidate) =>
+    candidate.department === slot.department &&
+    (candidate.year || '') === (slot.year || '')
+  );
+  if (batchConflict) {
+    return `This department/year already has ${batchConflict.subject?.name || 'a class'} at this time.`;
+  }
+
+  return null;
+};
+
 /**
  * Create a student account
  */
@@ -215,6 +291,12 @@ const createFaculty = async (req, res) => {
 
     console.log('✅ Faculty created:', userId);
 
+    try {
+      await syncFacultySubjects(newUser.id, department, subjectsArray);
+    } catch (syncErr) {
+      console.warn('⚠️ Faculty subject sync failed:', syncErr.message);
+    }
+
     // Send email (non-blocking)
     try {
       await sendCredentialsEmail({
@@ -391,6 +473,95 @@ const deactivateUser = async (req, res) => {
       success: false,
       message: 'Internal server error.',
     });
+  }
+};
+
+const updateUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      fullName,
+      email,
+      department,
+      degreeCourse,
+      year,
+      phone,
+      subjects,
+      isActive,
+    } = req.body;
+
+    const { data: user, error: findError } = await supabase
+      .from('users')
+      .select('id, user_id, role')
+      .eq('id', id)
+      .single();
+
+    if (findError || !user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    const updates = {
+      updated_at: new Date().toISOString(),
+    };
+    if (fullName !== undefined) updates.full_name = fullName;
+    if (email !== undefined) updates.email = email;
+    if (department !== undefined) updates.department = department;
+    if (degreeCourse !== undefined) updates.degree_course = degreeCourse;
+    if (year !== undefined) updates.year = year;
+    if (phone !== undefined) updates.phone = phone || null;
+    if (Array.isArray(subjects)) updates.subjects = subjects;
+    if (typeof isActive === 'boolean' && user.role !== 'admin') updates.is_active = isActive;
+
+    const { data, error } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('id', id)
+      .select('id, user_id, email, full_name, role, department, degree_course, year, phone, subjects, is_active, email_verified, is_first_login, created_at')
+      .single();
+
+    if (error) throw error;
+
+    if (user.role === 'faculty' && Array.isArray(subjects)) {
+      await syncFacultySubjects(id, department, subjects);
+    }
+
+    logActivity(req.user.id, 'updated_user', user.user_id, updates);
+
+    return res.json({ success: true, user: data, message: 'User updated successfully.' });
+  } catch (error) {
+    console.error('Update user error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const reactivateUser = async (req, res) => {
+  try {
+    const { data: user, error: findError } = await supabase
+      .from('users')
+      .select('id, user_id, role')
+      .eq('id', req.params.id)
+      .single();
+
+    if (findError || !user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+    if (user.role === 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin accounts do not need reactivation.' });
+    }
+
+    const { data, error } = await supabase
+      .from('users')
+      .update({ is_active: true, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id)
+      .select('id, user_id, email, full_name, role, department, degree_course, year, phone, subjects, is_active, email_verified, is_first_login, created_at')
+      .single();
+
+    if (error) throw error;
+    logActivity(req.user.id, 'reactivated_user', user.user_id, {});
+    return res.json({ success: true, user: data, message: 'User reactivated successfully.' });
+  } catch (error) {
+    console.error('Reactivate user error:', error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -760,6 +931,47 @@ const createSubject = async (req, res) => {
   }
 };
 
+const updateSubject = async (req, res) => {
+  try {
+    const { name, code, department, credits, semester } = req.body;
+    const { data, error } = await supabase
+      .from('subjects')
+      .update({ name, code, department, credits: credits || 3, semester: semester || null })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, subject: data, message: 'Subject updated.' });
+  } catch (err) {
+    console.error('Update subject error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const deleteSubject = async (req, res) => {
+  try {
+    const subjectId = req.params.id;
+    const [{ count: assignmentCount }, { count: slotCount }] = await Promise.all([
+      supabase.from('faculty_subjects').select('*', { count: 'exact', head: true }).eq('subject_id', subjectId),
+      supabase.from('timetable_slots').select('*', { count: 'exact', head: true }).eq('subject_id', subjectId),
+    ]);
+
+    if ((assignmentCount || 0) > 0 || (slotCount || 0) > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'Subject is assigned or used in timetable slots. Remove those links before deleting.',
+      });
+    }
+
+    const { error } = await supabase.from('subjects').delete().eq('id', subjectId);
+    if (error) throw error;
+    res.json({ success: true, message: 'Subject deleted.' });
+  } catch (err) {
+    console.error('Delete subject error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 const assignSubject = async (req, res) => {
   try {
     const { faculty_id, subject_id } = req.body;
@@ -798,6 +1010,11 @@ const getTimetableSlots = async (req, res) => {
 const createTimetableSlot = async (req, res) => {
   try {
     const { subject_id, faculty_id, department, year, day, start_time, end_time, room, slot_type } = req.body;
+    const conflictMessage = await validateTimetableSlotConflicts({ subject_id, faculty_id, department, year, day, start_time, end_time, room });
+    if (conflictMessage) {
+      return res.status(409).json({ success: false, message: conflictMessage });
+    }
+
     const { data, error } = await supabase
       .from('timetable_slots')
       .insert({ subject_id, faculty_id, department, year, day, start_time, end_time, room, slot_type: slot_type || 'lecture' })
@@ -807,6 +1024,43 @@ const createTimetableSlot = async (req, res) => {
     res.status(201).json({ success: true, slot: data, message: 'Timetable slot created.' });
   } catch (err) {
     console.error('Create timetable slot error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const updateTimetableSlot = async (req, res) => {
+  try {
+    const { subject_id, faculty_id, department, year, day, start_time, end_time, room, slot_type } = req.body;
+    const slot = { subject_id, faculty_id, department, year, day, start_time, end_time, room, slot_type: slot_type || 'lecture' };
+    const conflictMessage = await validateTimetableSlotConflicts(slot, req.params.id);
+    if (conflictMessage) {
+      return res.status(409).json({ success: false, message: conflictMessage });
+    }
+
+    const { data, error } = await supabase
+      .from('timetable_slots')
+      .update(slot)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, slot: data, message: 'Timetable slot updated.' });
+  } catch (err) {
+    console.error('Update timetable slot error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const deleteTimetableSlot = async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('timetable_slots')
+      .delete()
+      .eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true, message: 'Timetable slot deleted.' });
+  } catch (err) {
+    console.error('Delete timetable slot error:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -862,13 +1116,19 @@ module.exports = {
   getUsers,
   getUserById,
   deactivateUser,
+  updateUser,
+  reactivateUser,
   getAnalytics,
   getActivityLogs,
   getSubjects,
   createSubject,
+  updateSubject,
+  deleteSubject,
   assignSubject,
   getTimetableSlots,
   createTimetableSlot,
+  updateTimetableSlot,
+  deleteTimetableSlot,
   getLeaveRequests,
   updateLeaveStatus,
 };

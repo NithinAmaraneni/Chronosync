@@ -12,6 +12,9 @@ router.get('/classrooms', ctrl.getClassrooms);
 router.post('/classrooms', [
   body('name').trim().notEmpty().withMessage('Room name is required.'),
 ], ctrl.createClassroom);
+router.patch('/classrooms/:id', [
+  body('name').trim().notEmpty().withMessage('Room name is required.'),
+], ctrl.updateClassroom);
 router.delete('/classrooms/:id', ctrl.deleteClassroom);
 
 // ── Time slot templates ──
@@ -21,12 +24,16 @@ router.post('/time-slots', [
   body('start_time').notEmpty().withMessage('Start time is required.'),
   body('end_time').notEmpty().withMessage('End time is required.'),
 ], ctrl.upsertTimeSlot);
+router.delete('/time-slots/:id', ctrl.deleteTimeSlot);
 
 // ── Constraints ──
 router.get('/constraints', ctrl.getConstraints);
 router.post('/constraints', [
   body('constraint_type').notEmpty().withMessage('Constraint type is required.'),
 ], ctrl.createConstraint);
+router.patch('/constraints/:id', [
+  body('constraint_type').notEmpty().withMessage('Constraint type is required.'),
+], ctrl.updateConstraint);
 router.delete('/constraints/:id', ctrl.deleteConstraint);
 
 // ── AI Generation ──

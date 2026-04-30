@@ -2,6 +2,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '@/lib/api';
 
+/* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/set-state-in-effect */
+
 export default function ViewUsersPage() {
   const [users, setUsers] = useState<any[]>([]);
   const [pagination, setPagination] = useState<any>(null);
@@ -9,6 +11,9 @@ export default function ViewUsersPage() {
   const [roleFilter, setRoleFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selected, setSelected] = useState<any>(null);
+  const [editMode, setEditMode] = useState(false);
+  const [editForm, setEditForm] = useState<any>({});
+  const [msg, setMsg] = useState('');
 
   const loadUsers = useCallback(async (page = 1) => {
     setLoading(true);
@@ -23,7 +28,50 @@ export default function ViewUsersPage() {
 
   const handleDeactivate = async (id: string) => {
     if (!confirm('Deactivate this user?')) return;
-    try { await api.deactivateUser(id); loadUsers(pagination?.page || 1); setSelected(null); } catch (e) { console.error(e); }
+    try { await api.deactivateUser(id); await loadUsers(pagination?.page || 1); setSelected(null); setMsg('User deactivated.'); } catch (e: any) { setMsg(e.message || 'Failed to deactivate user.'); }
+  };
+
+  const openUser = (u: any) => {
+    setSelected(u);
+    setEditMode(false);
+    setEditForm({
+      fullName: u.full_name || '',
+      email: u.email || '',
+      department: u.department || '',
+      degreeCourse: u.degree_course || '',
+      year: u.year || '',
+      phone: u.phone || '',
+      subjects: Array.isArray(u.subjects) ? u.subjects.join(', ') : '',
+      isActive: !!u.is_active,
+    });
+  };
+
+  const handleSave = async () => {
+    if (!selected) return;
+    try {
+      const payload = {
+        ...editForm,
+        subjects: String(editForm.subjects || '').split(',').map((s: string) => s.trim()).filter(Boolean),
+      };
+      const data = await api.updateUser(selected.id, payload);
+      setSelected(data.user);
+      setEditMode(false);
+      setMsg('User updated.');
+      await loadUsers(pagination?.page || 1);
+    } catch (e: any) {
+      setMsg(e.message || 'Failed to update user.');
+    }
+  };
+
+  const handleReactivate = async (id: string) => {
+    try {
+      const data = await api.reactivateUser(id);
+      setSelected(data.user);
+      setMsg('User reactivated.');
+      await loadUsers(pagination?.page || 1);
+    } catch (e: any) {
+      setMsg(e.message || 'Failed to reactivate user.');
+    }
   };
 
   const statusBadge = (u: any) => {
@@ -38,6 +86,10 @@ export default function ViewUsersPage() {
         <h1 className="ds-page-title">Manage Users 👥</h1>
         <p className="ds-page-sub">View, search, and manage all registered users</p>
       </div>
+
+      {msg && <div className={`ds-alert ${msg.includes('Failed') ? 'ds-alert-error' : 'ds-alert-success'}`}>
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>{msg}
+      </div>}
 
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }} className="ds-fade-in">
         <div style={{ flex: 1, minWidth: 260, position: 'relative' }}>
@@ -79,7 +131,7 @@ export default function ViewUsersPage() {
                   <td><span className={`ds-badge ${s.cls}`}>{s.text}</span></td>
                   <td>
                     <div style={{ display: 'flex', gap: 4 }}>
-                      <button className="ds-btn ds-btn-ghost" style={{ padding: '0.3rem' }} onClick={() => setSelected(u)} title="View">
+                      <button className="ds-btn ds-btn-ghost" style={{ padding: '0.3rem' }} onClick={() => openUser(u)} title="View">
                         <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
                       </button>
                       {u.role !== 'admin' && u.is_active && <button className="ds-btn ds-btn-danger" style={{ padding: '0.3rem' }} onClick={() => handleDeactivate(u.id)} title="Deactivate">
@@ -116,21 +168,53 @@ export default function ViewUsersPage() {
                 <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 18, height: 18 }}><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
-            {[
-              { l: 'User ID', v: selected.user_id },
-              { l: 'Role', v: selected.role },
-              { l: 'Department', v: selected.department || '—' },
-              ...(selected.role === 'student' ? [{ l: 'Degree', v: selected.degree_course || '—' }, { l: 'Year', v: selected.year || '—' }, { l: 'Phone', v: selected.phone || '—' }] : []),
-              ...(selected.role === 'faculty' ? [{ l: 'Subjects', v: selected.subjects?.join(', ') || '—' }] : []),
-              { l: 'Status', v: selected.is_active ? '✅ Active' : '🚫 Inactive' },
-              { l: 'First Login', v: selected.is_first_login ? '⏳ Pending' : '✅ Done' },
-              { l: 'Created', v: new Date(selected.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) },
-            ].map((r, i) => (
-              <div key={r.l} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.65rem 0', borderTop: i > 0 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
-                <span style={{ fontSize: '0.82rem', color: '#9a7b6a' }}>{r.l}</span>
-                <span style={{ fontSize: '0.82rem', color: '#1c0a00', fontWeight: 500, textAlign: 'right', maxWidth: '60%' }}>{r.v}</span>
+            {editMode ? (
+              <div>
+                <div className="ds-grid-2">
+                  <div className="ds-form-group"><label className="ds-label">Full Name</label><input className="ds-input" value={editForm.fullName} onChange={e => setEditForm({ ...editForm, fullName: e.target.value })} /></div>
+                  <div className="ds-form-group"><label className="ds-label">Email</label><input className="ds-input" type="email" value={editForm.email} onChange={e => setEditForm({ ...editForm, email: e.target.value })} /></div>
+                </div>
+                <div className="ds-grid-2">
+                  <div className="ds-form-group"><label className="ds-label">Department</label><input className="ds-input" value={editForm.department} onChange={e => setEditForm({ ...editForm, department: e.target.value })} /></div>
+                  {selected.role === 'student' && <div className="ds-form-group"><label className="ds-label">Year</label><input className="ds-input" value={editForm.year} onChange={e => setEditForm({ ...editForm, year: e.target.value })} /></div>}
+                </div>
+                {selected.role === 'student' && (
+                  <div className="ds-grid-2">
+                    <div className="ds-form-group"><label className="ds-label">Degree</label><input className="ds-input" value={editForm.degreeCourse} onChange={e => setEditForm({ ...editForm, degreeCourse: e.target.value })} /></div>
+                    <div className="ds-form-group"><label className="ds-label">Phone</label><input className="ds-input" value={editForm.phone} onChange={e => setEditForm({ ...editForm, phone: e.target.value })} /></div>
+                  </div>
+                )}
+                {selected.role === 'faculty' && <div className="ds-form-group"><label className="ds-label">Subjects</label><input className="ds-input" value={editForm.subjects} onChange={e => setEditForm({ ...editForm, subjects: e.target.value })} placeholder="Comma separated" /></div>}
+                {selected.role !== 'admin' && <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: '1rem', fontSize: '0.82rem', color: '#1c0a00' }}><input type="checkbox" checked={editForm.isActive} onChange={e => setEditForm({ ...editForm, isActive: e.target.checked })} /> Active account</label>}
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button className="ds-btn ds-btn-primary" onClick={handleSave}>Save Changes</button>
+                  <button className="ds-btn ds-btn-ghost" onClick={() => setEditMode(false)}>Cancel</button>
+                </div>
               </div>
-            ))}
+            ) : (
+              <>
+                {[
+                  { l: 'User ID', v: selected.user_id },
+                  { l: 'Role', v: selected.role },
+                  { l: 'Department', v: selected.department || '—' },
+                  ...(selected.role === 'student' ? [{ l: 'Degree', v: selected.degree_course || '—' }, { l: 'Year', v: selected.year || '—' }, { l: 'Phone', v: selected.phone || '—' }] : []),
+                  ...(selected.role === 'faculty' ? [{ l: 'Subjects', v: selected.subjects?.join(', ') || '—' }] : []),
+                  { l: 'Status', v: selected.is_active ? 'Active' : 'Inactive' },
+                  { l: 'First Login', v: selected.is_first_login ? 'Pending' : 'Done' },
+                  { l: 'Created', v: new Date(selected.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) },
+                ].map((r, i) => (
+                  <div key={r.l} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.65rem 0', borderTop: i > 0 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
+                    <span style={{ fontSize: '0.82rem', color: '#9a7b6a' }}>{r.l}</span>
+                    <span style={{ fontSize: '0.82rem', color: '#1c0a00', fontWeight: 500, textAlign: 'right', maxWidth: '60%' }}>{r.v}</span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+                  <button className="ds-btn ds-btn-primary" onClick={() => setEditMode(true)}>Edit User</button>
+                  {selected.role !== 'admin' && !selected.is_active && <button className="ds-btn ds-btn-outline" onClick={() => handleReactivate(selected.id)}>Reactivate</button>}
+                  {selected.role !== 'admin' && selected.is_active && <button className="ds-btn ds-btn-danger" onClick={() => handleDeactivate(selected.id)}>Deactivate</button>}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

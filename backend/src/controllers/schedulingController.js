@@ -52,6 +52,34 @@ const createClassroom = async (req, res) => {
   }
 };
 
+const updateClassroom = async (req, res) => {
+  try {
+    const { name, building, floor, capacity, room_type, has_projector, has_ac, is_active } = req.body;
+    const updates = {
+      name,
+      building: building || null,
+      floor: floor || null,
+      capacity: capacity || 60,
+      room_type: room_type || 'lecture',
+      has_projector: has_projector !== false,
+      has_ac: has_ac || false,
+    };
+    if (typeof is_active === 'boolean') updates.is_active = is_active;
+
+    const { data, error } = await supabase
+      .from('classrooms')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, classroom: data, message: 'Classroom updated.' });
+  } catch (err) {
+    console.error('Update classroom error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 const deleteClassroom = async (req, res) => {
   try {
     const roomId = req.params.id;
@@ -112,6 +140,20 @@ const upsertTimeSlot = async (req, res) => {
   }
 };
 
+const deleteTimeSlot = async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('time_slot_templates')
+      .delete()
+      .eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true, message: 'Time slot deleted.' });
+  } catch (err) {
+    console.error('Delete time slot error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // ═══════════════════════════════════════════
 // SCHEDULING CONSTRAINTS
 // ═══════════════════════════════════════════
@@ -149,6 +191,31 @@ const createConstraint = async (req, res) => {
     res.status(201).json({ success: true, constraint: data, message: 'Constraint added.' });
   } catch (err) {
     console.error('Create constraint error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const updateConstraint = async (req, res) => {
+  try {
+    const { constraint_type, target_type, target_id, day, slot_number, value, priority } = req.body;
+    const { data, error } = await supabase
+      .from('scheduling_constraints')
+      .update({
+        constraint_type,
+        target_type: target_type || 'global',
+        target_id: target_id || null,
+        day: day || null,
+        slot_number: slot_number || null,
+        value: value || null,
+        priority: priority || 5,
+      })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, constraint: data, message: 'Constraint updated.' });
+  } catch (err) {
+    console.error('Update constraint error:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -313,11 +380,14 @@ const triggerSubjectEvent = async (req, res) => {
 module.exports = {
   getClassrooms,
   createClassroom,
+  updateClassroom,
   deleteClassroom,
   getTimeSlots,
   upsertTimeSlot,
+  deleteTimeSlot,
   getConstraints,
   createConstraint,
+  updateConstraint,
   deleteConstraint,
   triggerGeneration,
   getGenerationHistory,
