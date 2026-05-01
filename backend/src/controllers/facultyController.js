@@ -1,5 +1,203 @@
 const supabase = require('../config/supabase');
 
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+const timesOverlap = (startA, endA, startB, endB) => startA < endB && endA > startB;
+
+const getDaysInRange = (startDate, endDate) => {
+  if (!startDate || !endDate) return null;
+
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return null;
+
+  const days = new Set();
+  for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    days.add(WEEKDAYS[d.getDay()]);
+  }
+  return days;
+};
+
+const buildLeaveImpact = async (facultyId, startDate, endDate) => {
+  const requestedDays = getDaysInRange(startDate, endDate);
+
+  const { data: slots } = await supabase
+    .from('timetable_slots')
+    .select('id, day, start_time, end_time, department, year, room, slot_type, subject_id, subject:subjects(id, name, code)')
+    .eq('faculty_id', facultyId)
+    .order('day')
+    .order('start_time');
+
+  const affectedBaseSlots = requestedDays
+    ? (slots || []).filter(slot => requestedDays.has(slot.day))
+    : (slots || []);
+
+  if (affectedBaseSlots.length === 0) {
+    return {
+      totalClasses: 0,
+      affectedSlots: [],
+      message: requestedDays
+        ? 'No scheduled classes fall inside the selected leave dates.'
+        : 'You have no scheduled classes. Leave will not affect the timetable.',
+    };
+  }
+
+  const { data: faculty } = await supabase
+    .from('users')
+    .select('department')
+    .eq('id', facultyId)
+    .maybeSingle();
+
+  const dept = faculty?.department;
+  let potentialSubs = [];
+
+  if (dept) {
+    const { data: otherFaculty } = await supabase
+      .from('users')
+      .select('id, full_name')
+      .eq('role', 'faculty')
+      .eq('is_active', true)
+      .eq('department', dept)
+      .neq('id', facultyId);
+
+    const otherIds = (otherFaculty || []).map(f => f.id);
+    const { data: expertise } = await supabase
+      .from('faculty_subjects')
+      .select('faculty_id, subject_id')
+      .in('faculty_id', otherIds.length ? otherIds : ['_none_']);
+
+    const { data: busySlots } = await supabase
+      .from('timetable_slots')
+      .select('faculty_id, day, start_time, end_time')
+      .in('faculty_id', otherIds.length ? otherIds : ['_none_']);
+
+    const { data: unavailable } = await supabase
+      .from('faculty_availability')
+      .select('faculty_id, day, start_time, end_time, is_available')
+      .in('faculty_id', otherIds.length ? otherIds : ['_none_'])
+      .eq('is_available', false);
+
+    let leaveQuery = supabase
+      .from('leave_requests')
+      .select('faculty_id, start_date, end_date')
+      .in('faculty_id', otherIds.length ? otherIds : ['_none_'])
+      .eq('status', 'approved');
+    if (startDate && endDate) {
+      leaveQuery = leaveQuery.lte('start_date', endDate).gte('end_date', startDate);
+    }
+    const { data: approvedLeaves } = await leaveQuery;
+    const onLeaveSet = new Set((approvedLeaves || []).map(l => l.faculty_id));
+
+    const expertiseMap = {};
+    for (const e of (expertise || [])) {
+      if (!expertiseMap[e.faculty_id]) expertiseMap[e.faculty_id] = new Set();
+      expertiseMap[e.faculty_id].add(e.subject_id);
+    }
+
+    potentialSubs = (otherFaculty || []).map(f => ({
+      id: f.id,
+      name: f.full_name,
+      expertise: expertiseMap[f.id] || new Set(),
+      busySlots: (busySlots || []).filter(s => s.faculty_id === f.id),
+      unavailable: (unavailable || []).filter(a => a.faculty_id === f.id),
+      onLeave: onLeaveSet.has(f.id),
+    }));
+  }
+
+  const { data: classrooms } = await supabase
+    .from('classrooms')
+    .select('id, name, building, capacity, room_type, is_active')
+    .eq('is_active', true);
+
+  const { data: allSlots } = await supabase
+    .from('timetable_slots')
+    .select('id, day, start_time, end_time, room');
+
+  const affectedSlots = affectedBaseSlots.map(slot => {
+    const substitutes = potentialSubs
+      .filter(f => !f.onLeave)
+      .filter(f => !f.busySlots.some(s => s.day === slot.day && timesOverlap(s.start_time, s.end_time, slot.start_time, slot.end_time)))
+      .filter(f => !f.unavailable.some(a => a.day === slot.day && timesOverlap(a.start_time, a.end_time, slot.start_time, slot.end_time)))
+      .map(f => ({
+        id: f.id,
+        name: f.name,
+        isExpert: f.expertise.has(slot.subject_id),
+      }))
+      .sort((a, b) => (b.isExpert ? 1 : 0) - (a.isExpert ? 1 : 0) || a.name.localeCompare(b.name));
+
+    const freeRooms = (classrooms || [])
+      .filter(room => !room.room_type || room.room_type === slot.slot_type || room.room_type === 'lecture')
+      .filter(room => !(allSlots || []).some(s =>
+        s.id !== slot.id &&
+        s.day === slot.day &&
+        (s.room === room.name || s.room === room.id) &&
+        timesOverlap(s.start_time, s.end_time, slot.start_time, slot.end_time)
+      ))
+      .sort((a, b) => (b.capacity || 0) - (a.capacity || 0) || a.name.localeCompare(b.name))
+      .slice(0, 5)
+      .map(room => ({
+        id: room.id,
+        name: room.name,
+        building: room.building,
+        capacity: room.capacity,
+        roomType: room.room_type,
+      }));
+
+    return {
+      slotId: slot.id,
+      subject: slot.subject?.name || slot.subject?.code || 'Unknown',
+      subjectCode: slot.subject?.code,
+      day: slot.day,
+      time: `${slot.start_time?.slice(0, 5)} - ${slot.end_time?.slice(0, 5)}`,
+      start_time: slot.start_time,
+      end_time: slot.end_time,
+      room: slot.room,
+      availableSubstitutes: substitutes.length,
+      expertSubstitutes: substitutes.filter(s => s.isExpert).length,
+      substitutes: substitutes.slice(0, 8),
+      topSubstitute: substitutes.length > 0 ? { id: substitutes[0].id, name: substitutes[0].name, isExpert: substitutes[0].isExpert } : null,
+      freeRooms,
+    };
+  });
+
+  const autoAssignable = affectedSlots.filter(s => s.availableSubstitutes > 0).length;
+  const roomsAvailable = affectedSlots.filter(s => s.freeRooms.length > 0).length;
+
+  return {
+    totalClasses: affectedSlots.length,
+    autoAssignable,
+    roomsAvailable,
+    needsManual: affectedSlots.length - autoAssignable,
+    affectedSlots,
+    message: autoAssignable === affectedSlots.length
+      ? `All ${affectedSlots.length} affected classes have available substitute faculty.`
+      : `${autoAssignable}/${affectedSlots.length} classes have available substitute faculty. ${roomsAvailable}/${affectedSlots.length} have free room suggestions.`,
+  };
+};
+
+const buildCoverageNote = (coverageMode, coveragePlan, impact) => {
+  if (!coverageMode || !impact?.affectedSlots?.length) return '';
+
+  const lines = [
+    '',
+    '[Coverage Plan]',
+    `Mode: ${coverageMode === 'self' ? 'Faculty will take class in another free room' : 'Other faculty will take class'}`,
+  ];
+
+  for (const slot of impact.affectedSlots) {
+    const choice = coveragePlan?.[slot.slotId] || {};
+    if (coverageMode === 'self') {
+      const room = slot.freeRooms.find(r => r.id === choice.room_id || r.name === choice.room);
+      lines.push(`- slot ${slot.slotId}: ${slot.day} ${slot.time} ${slot.subject}: room ${room?.name || choice.room || 'not selected'}`);
+    } else {
+      const sub = slot.substitutes.find(s => s.id === choice.faculty_id);
+      lines.push(`- slot ${slot.slotId}: ${slot.day} ${slot.time} ${slot.subject}: substitute ${sub?.name || 'not selected'}`);
+    }
+  }
+
+  return lines.join('\n');
+};
+
 // ── Get faculty's assigned subjects ──
 const getMySubjects = async (req, res) => {
   try {
@@ -120,11 +318,14 @@ const getLeaveRequests = async (req, res) => {
 
 const applyLeave = async (req, res) => {
   try {
-    const { start_date, end_date, reason } = req.body;
+    const { start_date, end_date, reason, coverage_mode, coverage_plan } = req.body;
 
     if (new Date(start_date) > new Date(end_date)) {
       return res.status(400).json({ success: false, message: 'End date must be after start date.' });
     }
+
+    const impact = await buildLeaveImpact(req.user.id, start_date, end_date);
+    const coverageNote = buildCoverageNote(coverage_mode, coverage_plan, impact);
 
     const { data, error } = await supabase
       .from('leave_requests')
@@ -132,7 +333,7 @@ const applyLeave = async (req, res) => {
         faculty_id: req.user.id,
         start_date,
         end_date,
-        reason,
+        reason: `${reason}${coverageNote}`,
         status: 'pending',
       })
       .select()
@@ -187,114 +388,12 @@ const updateBookingStatus = async (req, res) => {
 const getLeaveImpact = async (req, res) => {
   try {
     const facultyId = req.user.id;
-
-    // Fetch faculty's timetable slots
-    const { data: slots } = await supabase
-      .from('timetable_slots')
-      .select('id, day, start_time, end_time, department, room, subject_id, subject:subjects(name, code)')
-      .eq('faculty_id', facultyId)
-      .order('day')
-      .order('start_time');
-
-    if (!slots || slots.length === 0) {
-      return res.json({
-        success: true,
-        impact: {
-          totalClasses: 0,
-          affectedSlots: [],
-          message: 'You have no scheduled classes. Leave will not affect the timetable.',
-        },
-      });
-    }
-
-    // Load faculty info
-    const { data: faculty } = await supabase
-      .from('users')
-      .select('department')
-      .eq('id', facultyId)
-      .maybeSingle();
-
-    const dept = faculty?.department;
-
-    // Find available substitutes per slot
-    let potentialSubs = [];
-    if (dept) {
-      const { data: otherFaculty } = await supabase
-        .from('users')
-        .select('id, full_name')
-        .eq('role', 'faculty')
-        .eq('is_active', true)
-        .eq('department', dept)
-        .neq('id', facultyId);
-
-      // Load their expertise
-      const otherIds = (otherFaculty || []).map(f => f.id);
-      const { data: expertise } = await supabase
-        .from('faculty_subjects')
-        .select('faculty_id, subject_id')
-        .in('faculty_id', otherIds.length ? otherIds : ['_none_']);
-
-      // Load their busy schedule
-      const { data: busySlots } = await supabase
-        .from('timetable_slots')
-        .select('faculty_id, day, start_time')
-        .in('faculty_id', otherIds.length ? otherIds : ['_none_']);
-
-      const busyMap = {};
-      for (const s of (busySlots || [])) {
-        busyMap[`${s.faculty_id}_${s.day}_${s.start_time}`] = true;
-      }
-
-      const expertiseMap = {};
-      for (const e of (expertise || [])) {
-        if (!expertiseMap[e.faculty_id]) expertiseMap[e.faculty_id] = new Set();
-        expertiseMap[e.faculty_id].add(e.subject_id);
-      }
-
-      potentialSubs = (otherFaculty || []).map(f => ({
-        id: f.id,
-        name: f.full_name,
-        expertise: expertiseMap[f.id] || new Set(),
-        busyMap,
-      }));
-    }
-
-    // Build impact for each slot
-    const affectedSlots = slots.map(slot => {
-      const subs = potentialSubs
-        .filter(f => !f.busyMap[`${f.id}_${slot.day}_${slot.start_time}`])
-        .map(f => ({
-          id: f.id,
-          name: f.name,
-          isExpert: f.expertise.has(slot.subject_id),
-        }))
-        .sort((a, b) => (b.isExpert ? 1 : 0) - (a.isExpert ? 1 : 0));
-
-      return {
-        slotId: slot.id,
-        subject: slot.subject?.name || slot.subject?.code || 'Unknown',
-        day: slot.day,
-        time: `${slot.start_time?.slice(0, 5)} – ${slot.end_time?.slice(0, 5)}`,
-        room: slot.room,
-        availableSubstitutes: subs.length,
-        expertSubstitutes: subs.filter(s => s.isExpert).length,
-        topSubstitute: subs.length > 0 ? { name: subs[0].name, isExpert: subs[0].isExpert } : null,
-      };
-    });
-
-    const autoAssignable = affectedSlots.filter(s => s.availableSubstitutes > 0).length;
+    const { start_date, end_date } = req.query;
+    const impact = await buildLeaveImpact(facultyId, start_date, end_date);
 
     res.json({
       success: true,
-      impact: {
-        totalClasses: slots.length,
-        autoAssignable,
-        needsManual: slots.length - autoAssignable,
-        affectedSlots,
-        message: autoAssignable === slots.length
-          ? `All ${slots.length} classes can be auto-assigned to substitutes.`
-          : `${autoAssignable}/${slots.length} classes can be auto-assigned. ${slots.length - autoAssignable} may need manual attention.`,
-      },
+      impact,
     });
   } catch (err) {
     console.error('Leave impact error:', err);

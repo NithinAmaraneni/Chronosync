@@ -2,6 +2,7 @@
 
 @layer base {
   :root {
+    --font-inter: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     --color-bg-primary: #070b14;
     --color-bg-secondary: #0f1628;
     --color-bg-card: #141b30;
@@ -32,7 +33,7 @@ html {
 body {
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
-  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-inter);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

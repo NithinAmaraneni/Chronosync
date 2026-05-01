@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, FormEvent } from 'react';
+import { useCallback, useEffect, useState, FormEvent } from 'react';
 import { api } from '@/lib/api';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -8,7 +8,8 @@ export default function FacultyLeavePage() {
   const [leaves, setLeaves] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ start_date: '', end_date: '', reason: '' });
+  const [form, setForm] = useState({ start_date: '', end_date: '', reason: '', coverage_mode: 'self' });
+  const [coveragePlan, setCoveragePlan] = useState<Record<string, { room?: string; room_id?: string; faculty_id?: string }>>({});
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState('');
   const [impact, setImpact] = useState<any>(null);
@@ -18,28 +19,65 @@ export default function FacultyLeavePage() {
   const load = () => api.getFacultyLeaves().then(d => { setLeaves(d.leaves || []); setLoading(false); }).catch(() => setLoading(false));
   useEffect(() => { load(); }, []);
 
-  // Load impact preview when form opens
-  const handleOpenForm = async () => {
-    setShowForm(true);
+  const loadImpact = useCallback(async (startDate = form.start_date, endDate = form.end_date) => {
     setLoadingImpact(true);
     try {
-      const d = await api.getLeaveImpact();
+      const d = await api.getLeaveImpact({ start_date: startDate, end_date: endDate });
       setImpact(d.impact);
+      setCoveragePlan((prev) => {
+        const next = { ...prev };
+        for (const slot of d.impact?.affectedSlots || []) {
+          if (!next[slot.slotId]) {
+            next[slot.slotId] = form.coverage_mode === 'self'
+              ? { room_id: slot.freeRooms?.[0]?.id, room: slot.freeRooms?.[0]?.name }
+              : { faculty_id: slot.substitutes?.[0]?.id };
+          }
+        }
+        return next;
+      });
     } catch (err) { console.error(err); }
     finally { setLoadingImpact(false); }
+  }, [form.coverage_mode, form.end_date, form.start_date]);
+
+  const handleOpenForm = async () => {
+    setShowForm(true);
+    await loadImpact();
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault(); setSaving(true); setMsg('');
     try {
-      await api.applyFacultyLeave(form);
-      setMsg('✅ Leave request submitted successfully! Your classes will be automatically reassigned when approved.');
-      setForm({ start_date: '', end_date: '', reason: '' });
+      await api.applyFacultyLeave({ ...form, coverage_plan: coveragePlan });
+      setMsg('✅ Leave request submitted successfully with your class coverage plan.');
+      setForm({ start_date: '', end_date: '', reason: '', coverage_mode: 'self' });
+      setCoveragePlan({});
       setShowForm(false);
       setImpact(null);
       load();
     } catch (err: any) { setMsg(err.message || 'Failed to submit'); }
     finally { setSaving(false); }
+  };
+
+  useEffect(() => {
+    if (!showForm || !form.start_date || !form.end_date) return;
+    const timer = setTimeout(() => loadImpact(form.start_date, form.end_date), 250);
+    return () => clearTimeout(timer);
+  }, [showForm, form.start_date, form.end_date, loadImpact]);
+
+  const updateCoverage = (slotId: string, value: { room?: string; room_id?: string; faculty_id?: string }) => {
+    setCoveragePlan(prev => ({ ...prev, [slotId]: { ...prev[slotId], ...value } }));
+  };
+
+  const setCoverageMode = (mode: string) => {
+    setForm({ ...form, coverage_mode: mode });
+    if (!impact?.affectedSlots) return;
+    const next: Record<string, { room?: string; room_id?: string; faculty_id?: string }> = {};
+    for (const slot of impact.affectedSlots) {
+      next[slot.slotId] = mode === 'self'
+        ? { room_id: slot.freeRooms?.[0]?.id, room: slot.freeRooms?.[0]?.name }
+        : { faculty_id: slot.substitutes?.[0]?.id };
+    }
+    setCoveragePlan(next);
   };
 
   const statusBadge = (s: string) => {
@@ -62,6 +100,12 @@ export default function FacultyLeavePage() {
     if (counts[l.status as keyof typeof counts] !== undefined) counts[l.status as keyof typeof counts]++;
   }
 
+  const coverageComplete = !impact?.affectedSlots?.length || impact.affectedSlots.every((slot: any) => (
+    form.coverage_mode === 'self'
+      ? Boolean(coveragePlan[slot.slotId]?.room_id || coveragePlan[slot.slotId]?.room)
+      : Boolean(coveragePlan[slot.slotId]?.faculty_id)
+  ));
+
   return (
     <div>
       <div className="ds-page-header ds-fade-in" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
@@ -72,7 +116,7 @@ export default function FacultyLeavePage() {
             <p className="ds-page-sub">Apply for leave with automatic class reassignment</p>
           </div>
         </div>
-        <button className="ds-btn ds-btn-primary" onClick={showForm ? () => { setShowForm(false); setImpact(null); } : handleOpenForm}>
+	        <button className="ds-btn ds-btn-primary" onClick={showForm ? () => { setShowForm(false); setImpact(null); setCoveragePlan({}); } : handleOpenForm}>
           {showForm ? (
             <><svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>Close</>
           ) : (
@@ -106,21 +150,47 @@ export default function FacultyLeavePage() {
                   <input className="ds-input" type="date" value={form.end_date} onChange={e => setForm({ ...form, end_date: e.target.value })} min={form.start_date || new Date().toISOString().split('T')[0]} required />
                 </div>
               </div>
-              <div className="ds-form-group">
-                <label className="ds-label">Reason *</label>
-                <textarea className="ds-textarea" value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} placeholder="Briefly describe the reason for leave..." required />
-              </div>
+	              <div className="ds-form-group">
+	                <label className="ds-label">Reason *</label>
+	                <textarea className="ds-textarea" value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} placeholder="Briefly describe the reason for leave..." required />
+	              </div>
 
-              <div className="ds-alert ds-alert-info" style={{ marginBottom: '1rem' }}>
-                <span>🤖</span>
-                <span style={{ fontSize: '0.78rem' }}>When your leave is approved, ChronoSync will <strong>automatically find replacement faculty</strong> based on subject expertise and availability.</span>
-              </div>
+	              <div className="ds-form-group">
+	                <label className="ds-label">Class coverage *</label>
+	                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+	                  <button
+	                    type="button"
+	                    className={`ds-btn ${form.coverage_mode === 'self' ? 'ds-btn-primary' : 'ds-btn-outline'}`}
+	                    style={{ justifyContent: 'center' }}
+	                    onClick={() => setCoverageMode('self')}
+	                  >
+	                    I will take class
+	                  </button>
+	                  <button
+	                    type="button"
+	                    className={`ds-btn ${form.coverage_mode === 'substitute' ? 'ds-btn-primary' : 'ds-btn-outline'}`}
+	                    style={{ justifyContent: 'center' }}
+	                    onClick={() => setCoverageMode('substitute')}
+	                  >
+	                    Other faculty
+	                  </button>
+	                </div>
+	              </div>
+
+	              <div className="ds-alert ds-alert-info" style={{ marginBottom: '1rem' }}>
+	                <span>🤖</span>
+	                <span style={{ fontSize: '0.78rem' }}>
+	                  {form.coverage_mode === 'self'
+	                    ? 'ChronoSync suggests free rooms for your affected classes so the timetable stays conflict-free.'
+	                    : 'ChronoSync shows faculty who are free for the selected class slots and prioritizes subject experts.'}
+	                </span>
+	              </div>
 
               <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button type="submit" className="ds-btn ds-btn-primary" disabled={saving} style={{ flex: 1, justifyContent: 'center' }}>
-                  {saving ? '⏳ Submitting...' : '📤 Submit Leave Request'}
-                </button>
-                <button type="button" className="ds-btn ds-btn-ghost" onClick={() => { setShowForm(false); setImpact(null); }}>Cancel</button>
+	                <button type="submit" className="ds-btn ds-btn-primary" disabled={saving || !coverageComplete} style={{ flex: 1, justifyContent: 'center' }}>
+	                  {saving ? '⏳ Submitting...' : '📤 Submit Leave Request'}
+	                </button>
+	                <button type="button" className="ds-btn ds-btn-ghost" onClick={() => { setShowForm(false); setImpact(null); setCoveragePlan({}); }}>Cancel</button>
               </div>
             </form>
           </div>
@@ -139,45 +209,66 @@ export default function FacultyLeavePage() {
                   <div style={{ fontSize: '0.6rem', color: '#ea580c', textTransform: 'uppercase', fontWeight: 700 }}>Classes</div>
                   <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 800, fontSize: '1.3rem', color: '#ea580c' }}>{impact.totalClasses}</div>
                 </div>
-                <div style={{ padding: '0.6rem', background: 'rgba(22,163,74,0.06)', borderRadius: 10, textAlign: 'center', border: '1px solid rgba(22,163,74,0.12)' }}>
-                  <div style={{ fontSize: '0.6rem', color: '#16a34a', textTransform: 'uppercase', fontWeight: 700 }}>Auto-assign</div>
-                  <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 800, fontSize: '1.3rem', color: '#16a34a' }}>{impact.autoAssignable}</div>
-                </div>
-                <div style={{ padding: '0.6rem', background: impact.needsManual > 0 ? 'rgba(220,38,38,0.06)' : 'rgba(22,163,74,0.06)', borderRadius: 10, textAlign: 'center', border: `1px solid ${impact.needsManual > 0 ? 'rgba(220,38,38,0.12)' : 'rgba(22,163,74,0.12)'}` }}>
-                  <div style={{ fontSize: '0.6rem', color: impact.needsManual > 0 ? '#dc2626' : '#16a34a', textTransform: 'uppercase', fontWeight: 700 }}>Manual</div>
-                  <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 800, fontSize: '1.3rem', color: impact.needsManual > 0 ? '#dc2626' : '#16a34a' }}>{impact.needsManual}</div>
-                </div>
-              </div>
+	                <div style={{ padding: '0.6rem', background: 'rgba(22,163,74,0.06)', borderRadius: 10, textAlign: 'center', border: '1px solid rgba(22,163,74,0.12)' }}>
+	                  <div style={{ fontSize: '0.6rem', color: '#16a34a', textTransform: 'uppercase', fontWeight: 700 }}>Free rooms</div>
+	                  <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 800, fontSize: '1.3rem', color: '#16a34a' }}>{impact.roomsAvailable ?? 0}</div>
+	                </div>
+	                <div style={{ padding: '0.6rem', background: impact.autoAssignable > 0 ? 'rgba(37,99,235,0.06)' : 'rgba(220,38,38,0.06)', borderRadius: 10, textAlign: 'center', border: `1px solid ${impact.autoAssignable > 0 ? 'rgba(37,99,235,0.12)' : 'rgba(220,38,38,0.12)'}` }}>
+	                  <div style={{ fontSize: '0.6rem', color: impact.autoAssignable > 0 ? '#2563eb' : '#dc2626', textTransform: 'uppercase', fontWeight: 700 }}>Faculty</div>
+	                  <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 800, fontSize: '1.3rem', color: impact.autoAssignable > 0 ? '#2563eb' : '#dc2626' }}>{impact.autoAssignable ?? 0}</div>
+	                </div>
+	              </div>
 
               <p style={{ fontSize: '0.78rem', color: '#7c5a4a', marginBottom: '0.8rem', lineHeight: 1.5, padding: '0.5rem 0.6rem', background: 'rgba(249,115,22,0.04)', borderRadius: 8 }}>
                 {impact.message}
               </p>
 
               {/* Per-slot breakdown */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: 260, overflowY: 'auto' }}>
-                {impact.affectedSlots?.map((slot: any, i: number) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0.55rem 0.7rem', background: slot.availableSubstitutes > 0 ? 'rgba(22,163,74,0.04)' : 'rgba(220,38,38,0.04)', border: `1px solid ${slot.availableSubstitutes > 0 ? 'rgba(22,163,74,0.1)' : 'rgba(220,38,38,0.1)'}`, borderRadius: 10 }}>
-                    <span style={{ fontSize: '0.9rem' }}>{slot.availableSubstitutes > 0 ? '✅' : '⚠️'}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, color: '#1c0a00', fontSize: '0.8rem' }}>{slot.subject}</div>
-                      <div style={{ fontSize: '0.7rem', color: '#9a7b6a' }}>{slot.day} • {slot.time}</div>
-                    </div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                      {slot.topSubstitute ? (
-                        <div>
-                          <div style={{ fontSize: '0.72rem', fontWeight: 600, color: slot.topSubstitute.isExpert ? '#16a34a' : '#d97706' }}>
-                            {slot.topSubstitute.name}
-                          </div>
-                          <div style={{ display: 'flex', gap: '0.2rem', justifyContent: 'flex-end' }}>
-                            {slot.topSubstitute.isExpert && <span className="ds-badge ds-badge-green" style={{ fontSize: '0.6rem', padding: '0.1rem 0.4rem' }}>Expert</span>}
-                            <span className="ds-badge ds-badge-slate" style={{ fontSize: '0.6rem', padding: '0.1rem 0.4rem' }}>{slot.availableSubstitutes} avail</span>
-                          </div>
-                        </div>
-                      ) : (
-                        <span className="ds-badge ds-badge-red" style={{ fontSize: '0.6rem' }}>No sub</span>
-                      )}
-                    </div>
-                  </div>
+	              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: 340, overflowY: 'auto' }}>
+	                {impact.affectedSlots?.map((slot: any, i: number) => (
+	                  <div key={i} style={{ display: 'flex', alignItems: 'start', gap: 10, padding: '0.65rem 0.7rem', background: form.coverage_mode === 'self' ? (slot.freeRooms?.length > 0 ? 'rgba(22,163,74,0.04)' : 'rgba(220,38,38,0.04)') : (slot.availableSubstitutes > 0 ? 'rgba(22,163,74,0.04)' : 'rgba(220,38,38,0.04)'), border: `1px solid ${form.coverage_mode === 'self' ? (slot.freeRooms?.length > 0 ? 'rgba(22,163,74,0.1)' : 'rgba(220,38,38,0.1)') : (slot.availableSubstitutes > 0 ? 'rgba(22,163,74,0.1)' : 'rgba(220,38,38,0.1)')}`, borderRadius: 10 }}>
+	                    <span style={{ fontSize: '0.9rem', marginTop: 2 }}>{form.coverage_mode === 'self' ? (slot.freeRooms?.length > 0 ? '✅' : '⚠️') : (slot.availableSubstitutes > 0 ? '✅' : '⚠️')}</span>
+	                    <div style={{ flex: 1, minWidth: 0 }}>
+	                      <div style={{ fontWeight: 600, color: '#1c0a00', fontSize: '0.8rem' }}>{slot.subject}</div>
+	                      <div style={{ fontSize: '0.7rem', color: '#9a7b6a' }}>{slot.day} • {slot.time}</div>
+	                    </div>
+	                    <div style={{ width: 220, flexShrink: 0 }}>
+	                      {form.coverage_mode === 'self' ? (
+	                        slot.freeRooms?.length > 0 ? (
+	                          <select
+	                            className="ds-select"
+	                            value={coveragePlan[slot.slotId]?.room_id || ''}
+	                            onChange={e => {
+	                              const room = slot.freeRooms.find((r: any) => r.id === e.target.value);
+	                              updateCoverage(slot.slotId, { room_id: room?.id, room: room?.name });
+	                            }}
+	                            required
+	                          >
+	                            {slot.freeRooms.map((room: any) => (
+	                              <option key={room.id} value={room.id}>{room.name}{room.capacity ? ` • ${room.capacity}` : ''}</option>
+	                            ))}
+	                          </select>
+	                        ) : (
+	                          <span className="ds-badge ds-badge-red" style={{ fontSize: '0.65rem' }}>No free room</span>
+	                        )
+	                      ) : (
+	                        slot.substitutes?.length > 0 ? (
+	                          <select
+	                            className="ds-select"
+	                            value={coveragePlan[slot.slotId]?.faculty_id || ''}
+	                            onChange={e => updateCoverage(slot.slotId, { faculty_id: e.target.value })}
+	                            required
+	                          >
+	                            {slot.substitutes.map((sub: any) => (
+	                              <option key={sub.id} value={sub.id}>{sub.name}{sub.isExpert ? ' • Expert' : ''}</option>
+	                            ))}
+	                          </select>
+	                        ) : (
+	                          <span className="ds-badge ds-badge-red" style={{ fontSize: '0.65rem' }}>No faculty free</span>
+	                        )
+	                      )}
+	                    </div>
+	                  </div>
                 ))}
               </div>
             </div>

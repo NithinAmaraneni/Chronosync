@@ -4,6 +4,11 @@ import { useAuth } from '@/context/AuthContext';
 import { io, Socket } from 'socket.io-client';
 import { api } from '@/lib/api';
 
+const SOCKET_URL =
+  process.env.NEXT_PUBLIC_SOCKET_URL ||
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/api\/?$/, '') ||
+  'http://localhost:5001';
+
 interface UserInfo {
   id: string;
   full_name: string;
@@ -68,7 +73,7 @@ export default function ChatInterface() {
 
   useEffect(() => {
     if (!user) return;
-    const newSocket = io('http://localhost:5001', {
+    const newSocket = io(SOCKET_URL, {
       withCredentials: true,
       transports: ['websocket', 'polling']
     });

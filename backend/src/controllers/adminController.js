@@ -1112,7 +1112,21 @@ const updateLeaveStatus = async (req, res) => {
     if (error) throw error;
 
     // Auto-trigger rescheduling on approval (non-blocking)
-    if (status === 'approved' && data?.faculty_id) {
+    const selfCoverage = data?.reason?.includes('Mode: Faculty will take class in another free room');
+    if (status === 'approved' && selfCoverage) {
+      const roomChoices = [...(data.reason || '').matchAll(/slot ([0-9a-f-]{36}): .*: room ([^\n]+)/gi)];
+      for (const [, slotId, room] of roomChoices) {
+        if (room && room !== 'not selected') {
+          await supabase
+            .from('timetable_slots')
+            .update({ room })
+            .eq('id', slotId)
+            .eq('faculty_id', data.faculty_id);
+        }
+      }
+    }
+
+    if (status === 'approved' && data?.faculty_id && !selfCoverage) {
       try {
         const { onLeaveApproved } = require('../services/conflictService');
         onLeaveApproved(data.faculty_id, data.start_date, data.end_date)

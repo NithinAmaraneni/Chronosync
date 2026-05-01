@@ -20,6 +20,20 @@ class ApiClient {
     return headers;
   }
 
+  private async parseResponse(response: Response): Promise<any> {
+    const contentType = response.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json')) {
+      return response.json();
+    }
+
+    const message = await response.text();
+    return {
+      success: false,
+      message: message || response.statusText || 'Request failed',
+    };
+  }
+
   async request(endpoint: string, options: RequestInit = {}): Promise<any> {
     const url = `${this.baseUrl}${endpoint}`;
     const config: RequestInit = {
@@ -27,7 +41,7 @@ class ApiClient {
       headers: { ...this.getHeaders(), ...options.headers },
     };
     const response = await fetch(url, config);
-    const data = await response.json();
+    const data = await this.parseResponse(response);
     if (!response.ok) throw { status: response.status, ...data };
     return data;
   }
@@ -42,7 +56,7 @@ class ApiClient {
       if (token) headers['Authorization'] = `Bearer ${token}`;
     }
     const response = await fetch(url, { method: 'POST', headers, body: formData });
-    const data = await response.json();
+    const data = await this.parseResponse(response);
     if (!response.ok) throw { status: response.status, ...data };
     return data;
   }
@@ -68,11 +82,12 @@ class ApiClient {
   async getAnalytics() { return this.request('/admin/analytics'); }
   async createStudent(data: any) { return this.request('/admin/students', { method: 'POST', body: JSON.stringify(data) }); }
   async createFaculty(data: any) { return this.request('/admin/faculty', { method: 'POST', body: JSON.stringify(data) }); }
-  async getUsers(params?: { role?: string; search?: string; page?: number }) {
+  async getUsers(params?: { role?: string; search?: string; page?: number; limit?: number }) {
     const sp = new URLSearchParams();
     if (params?.role) sp.set('role', params.role);
     if (params?.search) sp.set('search', params.search);
     if (params?.page) sp.set('page', params.page.toString());
+    if (params?.limit) sp.set('limit', params.limit.toString());
     const q = sp.toString();
     return this.request(`/admin/users${q ? `?${q}` : ''}`);
   }
@@ -117,7 +132,13 @@ class ApiClient {
   async setFacultyAvailability(data: any) { return this.request('/faculty/availability', { method: 'POST', body: JSON.stringify(data) }); }
   async deleteFacultyAvailability(id: string) { return this.request(`/faculty/availability/${id}`, { method: 'DELETE' }); }
   async getFacultyLeaves() { return this.request('/faculty/leaves'); }
-  async getLeaveImpact() { return this.request('/faculty/leave-impact'); }
+  async getLeaveImpact(params?: { start_date?: string; end_date?: string }) {
+    const sp = new URLSearchParams();
+    if (params?.start_date) sp.set('start_date', params.start_date);
+    if (params?.end_date) sp.set('end_date', params.end_date);
+    const q = sp.toString();
+    return this.request(`/faculty/leave-impact${q ? `?${q}` : ''}`);
+  }
   async applyFacultyLeave(data: any) { return this.request('/faculty/leaves', { method: 'POST', body: JSON.stringify(data) }); }
   async getFacultyBookings() { return this.request('/faculty/bookings'); }
   async updateBookingStatus(id: string, status: string) {

@@ -1,14 +1,21 @@
 'use client';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { FormEvent, useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '@/lib/api';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export default function ConflictDashboardPage() {
   const [conflicts, setConflicts] = useState<any[]>([]);
+  const [slots, setSlots] = useState<any[]>([]);
+  const [subjects, setSubjects] = useState<any[]>([]);
+  const [faculty, setFaculty] = useState<any[]>([]);
   const [stats, setStats] = useState<any>({ total: 0, critical: 0, high: 0, medium: 0, low: 0, slotsAffected: 0 });
   const [slotCount, setSlotCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [manualConflict, setManualConflict] = useState<any | null>(null);
+  const [manualSlotId, setManualSlotId] = useState('');
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualForm, setManualForm] = useState({ subject_id: '', faculty_id: '', department: '', year: '', day: 'Monday', start_time: '09:00', end_time: '10:00', room: '', slot_type: 'lecture' });
   const [fixing, setFixing] = useState(false);
   const [fixingSlots, setFixingSlots] = useState<Set<string>>(new Set());
   const [dept, setDept] = useState('');
@@ -20,6 +27,20 @@ export default function ConflictDashboardPage() {
   const timerRef = useRef<any>(null);
 
   const departments = ['Computer Science', 'Electronics', 'Mechanical', 'Civil', 'Electrical', 'Information Technology', 'Chemical', 'Biotechnology', 'Mathematics', 'Physics', 'Chemistry', 'Commerce', 'Arts'];
+  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const years = ['1st Year', '2nd Year', '3rd Year', '4th Year', '5th Year'];
+
+  const slotToForm = (slot: any) => ({
+    subject_id: slot?.subject_id || '',
+    faculty_id: slot?.faculty_id || '',
+    department: slot?.department || '',
+    year: slot?.year || '',
+    day: slot?.day || 'Monday',
+    start_time: slot?.start_time?.slice(0, 5) || '09:00',
+    end_time: slot?.end_time?.slice(0, 5) || '10:00',
+    room: slot?.room || '',
+    slot_type: slot?.slot_type || 'lecture',
+  });
 
   const loadConflicts = useCallback(async () => {
     try {
@@ -34,7 +55,26 @@ export default function ConflictDashboardPage() {
     }
   }, [dept]);
 
-  useEffect(() => { loadConflicts(); }, [loadConflicts]);
+  const loadSlots = useCallback(async () => {
+    const d = await api.getTimetableSlots(dept || undefined);
+    setSlots(d.slots || []);
+    return d.slots || [];
+  }, [dept]);
+
+  const loadReferenceData = useCallback(async () => {
+    const [subjectsResult, facultyResult] = await Promise.allSettled([
+      api.getSubjects(),
+      api.getUsers({ role: 'faculty', limit: 100 }),
+    ]);
+    if (subjectsResult.status === 'fulfilled') setSubjects(subjectsResult.value.subjects || []);
+    if (facultyResult.status === 'fulfilled') setFaculty(facultyResult.value.users || []);
+  }, []);
+
+  useEffect(() => { loadReferenceData(); }, [loadReferenceData]);
+  useEffect(() => {
+    loadConflicts();
+    loadSlots().catch(console.error);
+  }, [loadConflicts, loadSlots]);
 
   // Auto-refresh every 15 seconds
   useEffect(() => {
@@ -89,6 +129,38 @@ export default function ConflictDashboardPage() {
         ids.forEach((id: string) => next.delete(id));
         return next;
       });
+    }
+  };
+
+  const openManualEdit = async (conflict: any) => {
+    const latestSlots = slots.length ? slots : await loadSlots();
+    const firstSlot = latestSlots.find((slot: any) => conflict.affectedSlots?.includes(slot.id));
+    setManualConflict(conflict);
+    setManualSlotId(firstSlot?.id || conflict.affectedSlots?.[0] || '');
+    setManualForm(slotToForm(firstSlot));
+    setMsg('');
+  };
+
+  const handleManualSlotChange = (slotId: string) => {
+    const slot = slots.find(s => s.id === slotId);
+    setManualSlotId(slotId);
+    setManualForm(slotToForm(slot));
+  };
+
+  const handleManualSave = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!manualSlotId) return;
+    setManualSaving(true);
+    setMsg('');
+    try {
+      await api.updateTimetableSlot(manualSlotId, manualForm);
+      setMsg('Manual update saved. Conflicts rescanned.');
+      await Promise.all([loadConflicts(), loadSlots()]);
+      setManualConflict(null);
+    } catch (err: any) {
+      setMsg(err.message || 'Manual update failed.');
+    } finally {
+      setManualSaving(false);
     }
   };
 
@@ -154,6 +226,108 @@ export default function ConflictDashboardPage() {
         </div>
       </div>
 
+      {manualConflict && (
+        <div className="ds-card ds-fade-in" style={{ marginBottom: '1.5rem', border: '1px solid rgba(37,99,235,0.16)', background: 'rgba(37,99,235,0.035)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'start', marginBottom: '1rem' }}>
+            <div>
+              <h3 style={{ fontFamily: "'Syne',sans-serif", fontWeight: 800, color: '#1c0a00', fontSize: '1rem', marginBottom: 4 }}>Manual conflict edit</h3>
+              <p style={{ color: '#7c5a4a', fontSize: '0.78rem', lineHeight: 1.5 }}>
+                {manualConflict.title} • choose one affected slot, move it, then save to rescan.
+              </p>
+            </div>
+            <button className="ds-btn ds-btn-ghost" style={{ padding: '0.25rem 0.45rem' }} onClick={() => setManualConflict(null)}>✕</button>
+          </div>
+
+          <form onSubmit={handleManualSave}>
+            <div className="ds-form-group">
+              <label className="ds-label">Affected slot</label>
+              <select className="ds-select" value={manualSlotId} onChange={e => handleManualSlotChange(e.target.value)} required>
+                <option value="" disabled>Select slot</option>
+                {(manualConflict.affectedSlots || []).map((id: string) => {
+                  const slot = slots.find(s => s.id === id);
+                  return (
+                    <option key={id} value={id}>
+                      {slot ? `${slot.subject?.code || slot.subject?.name || 'Slot'} • ${slot.day} ${slot.start_time?.slice(0, 5)}-${slot.end_time?.slice(0, 5)} • ${slot.faculty?.full_name || 'No faculty'} • ${slot.room || 'No room'}` : id}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            <div className="ds-grid-2">
+              <div className="ds-form-group">
+                <label className="ds-label">Subject</label>
+                <select className="ds-select" value={manualForm.subject_id} onChange={e => setManualForm({ ...manualForm, subject_id: e.target.value })} required>
+                  <option value="" disabled>Select subject</option>
+                  {subjects.map((s: any) => <option key={s.id} value={s.id}>{s.code} — {s.name}</option>)}
+                </select>
+              </div>
+              <div className="ds-form-group">
+                <label className="ds-label">Faculty</label>
+                <select className="ds-select" value={manualForm.faculty_id} onChange={e => setManualForm({ ...manualForm, faculty_id: e.target.value })} required>
+                  <option value="" disabled>Select faculty</option>
+                  {faculty.map((f: any) => <option key={f.id} value={f.id}>{f.full_name}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div className="ds-grid-3">
+              <div className="ds-form-group">
+                <label className="ds-label">Department</label>
+                <select className="ds-select" value={manualForm.department} onChange={e => setManualForm({ ...manualForm, department: e.target.value })} required>
+                  <option value="" disabled>Select department</option>
+                  {departments.map(d => <option key={d}>{d}</option>)}
+                </select>
+              </div>
+              <div className="ds-form-group">
+                <label className="ds-label">Year</label>
+                <select className="ds-select" value={manualForm.year} onChange={e => setManualForm({ ...manualForm, year: e.target.value })}>
+                  <option value="">All Years</option>
+                  {years.map(y => <option key={y}>{y}</option>)}
+                </select>
+              </div>
+              <div className="ds-form-group">
+                <label className="ds-label">Day</label>
+                <select className="ds-select" value={manualForm.day} onChange={e => setManualForm({ ...manualForm, day: e.target.value })} required>
+                  {days.map(d => <option key={d}>{d}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div className="ds-grid-4">
+              <div className="ds-form-group">
+                <label className="ds-label">Start</label>
+                <input className="ds-input" type="time" value={manualForm.start_time} onChange={e => setManualForm({ ...manualForm, start_time: e.target.value })} required />
+              </div>
+              <div className="ds-form-group">
+                <label className="ds-label">End</label>
+                <input className="ds-input" type="time" value={manualForm.end_time} onChange={e => setManualForm({ ...manualForm, end_time: e.target.value })} required />
+              </div>
+              <div className="ds-form-group">
+                <label className="ds-label">Room</label>
+                <input className="ds-input" value={manualForm.room} onChange={e => setManualForm({ ...manualForm, room: e.target.value })} placeholder="e.g., A-201" />
+              </div>
+              <div className="ds-form-group">
+                <label className="ds-label">Type</label>
+                <select className="ds-select" value={manualForm.slot_type} onChange={e => setManualForm({ ...manualForm, slot_type: e.target.value })}>
+                  <option value="lecture">Lecture</option>
+                  <option value="lab">Lab</option>
+                  <option value="tutorial">Tutorial</option>
+                  <option value="seminar">Seminar</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <button type="submit" className="ds-btn ds-btn-primary" disabled={manualSaving || !manualSlotId}>
+                {manualSaving ? 'Saving...' : 'Save manual edit'}
+              </button>
+              <button type="button" className="ds-btn ds-btn-ghost" onClick={() => setManualConflict(null)}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Stats row */}
       <div className="ds-grid-4 ds-stagger" style={{ marginBottom: '1.5rem' }}>
         {/* Health score */}
@@ -218,19 +392,28 @@ export default function ConflictDashboardPage() {
                         <span className="ds-badge ds-badge-slate">{c.affectedSlots?.length || 0} slot(s)</span>
                       </div>
                     </div>
-                    <button
-                      className="ds-btn ds-btn-outline"
-                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.72rem', flexShrink: 0, borderColor: style.border }}
-                      disabled={isFixing}
-                      onClick={() => handleFixConflict(c)}
-                    >
-                      {isFixing ? (
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <span style={{ width: 12, height: 12, border: '2px solid currentcolor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin .7s linear infinite', display: 'inline-block' }} />
-                          Fixing
-                        </span>
-                      ) : '🔧 Fix'}
-                    </button>
+                    <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      <button
+                        className="ds-btn ds-btn-outline"
+                        style={{ padding: '0.4rem 0.8rem', fontSize: '0.72rem', borderColor: style.border }}
+                        disabled={isFixing}
+                        onClick={() => handleFixConflict(c)}
+                      >
+                        {isFixing ? (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{ width: 12, height: 12, border: '2px solid currentcolor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin .7s linear infinite', display: 'inline-block' }} />
+                            Fixing
+                          </span>
+                        ) : '🔧 Fix'}
+                      </button>
+                      <button
+                        className="ds-btn ds-btn-ghost"
+                        style={{ padding: '0.4rem 0.8rem', fontSize: '0.72rem' }}
+                        onClick={() => openManualEdit(c)}
+                      >
+                        ✎ Manual
+                      </button>
+                    </div>
                   </div>
                 );
               })}
