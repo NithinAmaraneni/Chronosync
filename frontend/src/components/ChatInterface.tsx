@@ -1,13 +1,7 @@
 'use client';
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { io, Socket } from 'socket.io-client';
 import { api } from '@/lib/api';
-
-const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL ||
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/api\/?$/, '') ||
-  'http://localhost:5001';
 
 interface UserInfo {
   id: string;
@@ -32,8 +26,8 @@ export default function ChatInterface() {
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [typingUsers, setTypingUsers] = useState<Record<string, boolean>>({});
   const [inputText, setInputText] = useState('');
-  const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [sending, setSending] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -71,73 +65,54 @@ export default function ChatInterface() {
     if (user) fetchUsers();
   }, [user]);
 
+  const loadMessages = useCallback(async () => {
+    if (!selectedUser) return;
+
+    try {
+      const otherUserId = (selectedUser as any).user_id || selectedUser.id;
+      const data = await api.getChatMessages(otherUserId);
+      if (data.success) {
+        setMessages(data.messages || []);
+        setIsConnected(true);
+      }
+    } catch (err) {
+      console.error('Failed to fetch chat messages:', err);
+      setIsConnected(false);
+    }
+  }, [selectedUser]);
+
   useEffect(() => {
     if (!user) return;
-    const newSocket = io(SOCKET_URL, {
-      withCredentials: true,
-      transports: ['websocket', 'polling']
-    });
 
-    const currentId = (user as any)?.userId || user?.id;
-    newSocket.on('connect', () => {
-      setIsConnected(true);
-      newSocket.emit('register', currentId);
-    });
-
-    newSocket.on('disconnect', () => {
-      setIsConnected(false);
-    });
-
-    newSocket.on('history', (history: Message[]) => {
-      setMessages(history);
-
-      // Calculate initial unread counts (simplistic approach: all messages where we are receiver are unread unless we select them)
-      // For a robust system, we would need a 'read_status' in the database.
-      // Here, we'll just start with 0 unread since it's an ephemeral array on backend.
-    });
-
-    newSocket.on('new_message', (message: Message) => {
-      console.log('Received new_message from socket:', message);
-      setMessages(prev => {
-        // Prevent duplicates (handles both optimistic and server echo)
-        if (prev.some(m => m.id === message.id)) return prev;
-        // Replace optimistic placeholder if it matches (same senderId + receiverId + text)
-        const optimisticIdx = prev.findIndex(
-          m => m.id.startsWith('optimistic_') &&
-            m.senderId === message.senderId &&
-            m.receiverId === message.receiverId &&
-            m.text === message.text
-        );
-        if (optimisticIdx !== -1) {
-          const updated = [...prev];
-          updated[optimisticIdx] = message;
-          return updated;
-        }
-        return [...prev, message];
-      });
-
-      // Handle unread counts — key on senderId (short user_id) to match sidebar keys
-      const currentlySelected = selectedUserRef.current;
-      const currentId = (user as any)?.userId || user?.id;
-      if (message.senderId !== currentId) {
-        const selectedShortId = currentlySelected
-          ? ((currentlySelected as any).user_id || currentlySelected.id)
-          : null;
-        if (!selectedShortId || selectedShortId !== message.senderId) {
-          setUnreadCounts(prev => ({
-            ...prev,
-            [message.senderId]: (prev[message.senderId] || 0) + 1
-          }));
-        }
+    let cancelled = false;
+    const checkStatus = async () => {
+      try {
+        const data = await api.getChatStatus();
+        if (!cancelled) setIsConnected(Boolean(data.connected));
+      } catch (err) {
+        console.error('Chat API status failed:', err);
+        if (!cancelled) setIsConnected(false);
       }
-    });
+    };
 
-    setSocket(newSocket);
-
+    checkStatus();
+    const timer = setInterval(checkStatus, 10000);
     return () => {
-      newSocket.disconnect();
+      cancelled = true;
+      clearInterval(timer);
     };
   }, [user]);
+
+  useEffect(() => {
+    if (!selectedUser) {
+      setMessages([]);
+      return;
+    }
+
+    loadMessages();
+    const timer = setInterval(loadMessages, 3000);
+    return () => clearInterval(timer);
+  }, [selectedUser, loadMessages]);
 
   useEffect(() => {
     if (messagesEndRef.current) {
@@ -159,20 +134,16 @@ export default function ChatInterface() {
 
     // ── 2. Persist clear timestamp to DB (best-effort, in background) ──
     try {
-      const result = await api.request('/chat/clear', {
-        method: 'POST',
-        body: JSON.stringify({ other_user_id: otherUserId }),
-      });
+      const result = await api.clearChat(otherUserId);
       console.log('[Chat] Conversation cleared in DB:', result);
     } catch (err) {
       console.error('[Chat] Failed to persist clear to DB (table may not exist yet):', err);
     }
   };
 
-  const sendMessage = (e: React.FormEvent) => {
+  const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || !selectedUser || !socket) {
-      console.log('Cannot send:', { inputText: inputText.trim(), selectedUser, hasSocket: !!socket });
+    if (!inputText.trim() || !selectedUser || sending) {
       return;
     }
 
@@ -198,8 +169,21 @@ export default function ChatInterface() {
     setMessages(prev => [...prev, optimisticMsg]);
     setInputText('');
 
-    // Emit to server — server will persist & broadcast back with real DB id
-    socket.emit('send_message', { senderId, receiverId, text });
+    try {
+      setSending(true);
+      const result = await api.sendChatMessage(receiverId, text);
+      if (result.success && result.message) {
+        setMessages(prev => prev.map(m => m.id === optimisticMsg.id ? result.message : m));
+        setIsConnected(true);
+      }
+    } catch (err) {
+      console.error('Failed to send message:', err);
+      setIsConnected(false);
+      setMessages(prev => prev.filter(m => m.id !== optimisticMsg.id));
+      setInputText(text);
+    } finally {
+      setSending(false);
+    }
   };
 
   const currentUserId = (user as any)?.userId || user?.id;
@@ -226,7 +210,7 @@ export default function ChatInterface() {
             </h3>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: isConnected ? '#10b981' : '#ef4444' }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: isConnected ? '#10b981' : '#ef4444' }}></span>
-              {isConnected ? 'Online' : 'Connecting...'}
+	              {isConnected ? 'Connected' : 'Connecting...'}
             </div>
           </div>
 
@@ -422,10 +406,10 @@ export default function ChatInterface() {
                   </div>
                   <button
                     type="submit"
-                    disabled={!inputText.trim()}
+                    disabled={!inputText.trim() || sending}
                     style={{
-                      background: inputText.trim() ? 'linear-gradient(135deg, #f97316, #ef4444)' : '#e5e7eb',
-                      color: inputText.trim() ? 'white' : '#9ca3af',
+                      background: inputText.trim() && !sending ? 'linear-gradient(135deg, #f97316, #ef4444)' : '#e5e7eb',
+                      color: inputText.trim() && !sending ? 'white' : '#9ca3af',
                       border: 'none',
                       borderRadius: '50%',
                       width: '48px',
@@ -433,9 +417,9 @@ export default function ChatInterface() {
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      cursor: inputText.trim() ? 'pointer' : 'not-allowed',
+                      cursor: inputText.trim() && !sending ? 'pointer' : 'not-allowed',
                       transition: 'all 0.2s',
-                      boxShadow: inputText.trim() ? '0 4px 10px rgba(249, 115, 22, 0.3)' : 'none'
+                      boxShadow: inputText.trim() && !sending ? '0 4px 10px rgba(249, 115, 22, 0.3)' : 'none'
                     }}
                   >
                     <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" style={{ width: 20, height: 20, transform: 'rotate(90deg) translateX(2px)' }}>

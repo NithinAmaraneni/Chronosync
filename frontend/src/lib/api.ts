@@ -145,6 +145,18 @@ class ApiClient {
     return this.request(`/faculty/bookings/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
   }
 
+  // ─── Chat ───
+  async getChatStatus() { return this.request('/chat/status'); }
+  async getChatMessages(otherUserId: string) {
+    return this.request(`/chat/messages?other_user_id=${encodeURIComponent(otherUserId)}`);
+  }
+  async sendChatMessage(receiverId: string, text: string) {
+    return this.request('/chat/messages', { method: 'POST', body: JSON.stringify({ receiver_id: receiverId, text }) });
+  }
+  async clearChat(otherUserId: string) {
+    return this.request('/chat/clear', { method: 'POST', body: JSON.stringify({ other_user_id: otherUserId }) });
+  }
+
   // ─── Student ───
   async getStudentTimetable() { return this.request('/student/timetable'); }
   async getStudentFacultyList() { return this.request('/student/faculty'); }
