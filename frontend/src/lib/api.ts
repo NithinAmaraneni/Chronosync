@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://chronosync-backend-n2xd.onrender.com';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://chronosync-backend-n2xd.onrender.com/api';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
